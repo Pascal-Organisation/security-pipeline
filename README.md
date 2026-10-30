@@ -224,15 +224,17 @@ Der Public Key (`cosign.pub`) liegt auf jedem Host unter `/etc/app-deploy/cosign
 | Deploy (VM 111) | `pascalhaag-website-deploy`, `websiteghana-deploy`, `tickets-deploy` | nur Deploy-Jobs des jeweiligen Repos | nur zu den Zielhosts (+ GitHub) |
 | GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos, DAST und Re-Scan auch für private | – |
 
-Regeln: Runner ephemeral, eigenes VLAN ohne Route ins Management-Netz, Self-hosted Runner
-nie für öffentliche Repos freigeben. Der Signier-Job von `tickets` läuft derzeit auf
-`ci`, also auf derselben VM wie Builds und Tests (siehe Grenzen).
+Regeln: CI- und Deploy-Runner auf getrennten VMs, beide per Proxmox-Firewall vom LAN
+getrennt; Self-hosted Runner nie für öffentliche Repos freigeben. Der Signier-Job von
+`tickets` läuft derzeit auf `ci`, also auf derselben VM wie Builds und Tests (siehe Grenzen).
 
 **Grenzen, offen benannt:**
-- `--ephemeral` erneuert nur den Runner-Prozess. Docker-Daemon, Images und Build-Cache
-  bleiben zwischen Jobs und Repos bestehen; Zugriff auf den Docker-Socket ist faktisch root
-  auf der VM. Gegenmaßnahmen hier: `docker build --pull`, Trivy-Cache pro Run, Scanner als
-  Runner-User. Sauber wird es erst mit einer VM pro Job (Proxmox-Template klonen).
+- Die Runner sind **persistent**, nicht pro Job neu (Stand laut homelab- und
+  websiteghana-Doku). Arbeitsverzeichnis, Docker-Daemon, Images und Build-Cache bleiben
+  zwischen Jobs und Repos bestehen; Zugriff auf den Docker-Socket ist faktisch root auf der
+  VM. Gegenmaßnahmen hier: `docker build --pull`, Trivy-Cache pro Run, Scanner als
+  Runner-User, `persist-credentials: false`. Sauber wird es erst mit einer frischen VM pro
+  Job (Proxmox-Template klonen).
 - Der Cosign-Key privater Repos ist ein GitHub-Secret und damit für jeden Workflow der
   freigegebenen Repos lesbar. Der Branch-Guard und die Provenance-Prüfung auf dem Host
   schließen „Feature-Branch signiert“, aber nicht „jemand mit Schreibrechten liest den Key
@@ -240,8 +242,9 @@ nie für öffentliche Repos freigeben. Der Signier-Job von `tickets` läuft derz
 - TruffleHog kann ohne Egress zu den Providern nichts verifizieren – Funde sind dann
   `unknown` und blockieren (gewollt, aber laut).
 - zizmor und Bandit werden per pip **ohne Hashes** installiert (Version gepinnt). Das
-  digest-gepinnte zizmor-OCI-Image braucht x86-64-v2 – Proxmox-CPU-Typ der Runner-VMs auf
-  `x86-64-v2-AES` stellen, dann kann es umgestellt werden.
+  digest-gepinnte zizmor-OCI-Image braucht x86-64-v2. Die VMs 110/111 laufen laut
+  websiteghana-Doku seit 05.10. mit CPU-Typ `host` – das Image sollte dort also laufen;
+  Umstellung steht noch aus.
 
 ## Host-Setup (Container-Apps)
 
