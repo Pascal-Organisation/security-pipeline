@@ -1,0 +1,148 @@
+## Container deploy, push mode — reusable. PRIVATE repos only.
+##
+## The deploy runner (separate VM, separate runner group) never builds or checks out
+## code. It only asks the host to deploy one digest:
+##
+##   ssh deploy@<host> "deploy sha256:<digest>"
+##
+## On the host, authorized_keys pins that key to `app-deploy <app>` and to the runner's
+## IP. app-deploy decides on its own: signature, SBOM + provenance attestations,
+## freshness, health, rollback (see deployer/app-deploy). A compromised deploy runner
+## can trigger a deploy of an image the pipeline signed — nothing else.
+##
+## Public repos do not use this: a self-hosted runner must never serve a public repo.
+## They deploy pull-based (systemd timer runs app-deploy without a command).
+##
+## Deploy status: a GitHub Deployment (environment, sha, digest) with in_progress ->
+## success/failure, plus the job summary and an optional ntfy push.
+name: deploy-container (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      digest:
+        description: "Image digest from build-container.yml (sha256:...)."
+        type: string
+        required: true
+      ssh-host:
+        description: "Host (IP) that runs app-deploy for this app."
+        type: string
+        required: true
+      ssh-user:
+        type: string
+        default: deploy
+      environment:
+        type: string
+        default: production
+      url:
+        description: "Public URL for the deployment record and the smoke check. Empty skips the check."
+        type: string
+        default: ""
+      deploy-runner:
+        description: 'runs-on of the deploy runner, as JSON.'
+        type: string
+        default: '["self-hosted","deploy"]'
+    secrets:
+      deploy-ssh-key:
+        required: true
+      deploy-known-hosts:
+        required: true
+      ntfy-url:
+        description: "Optional ntfy topic URL for deploy notifications."
+        required: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    if: ${{ github.event.repository.private }}
+    runs-on: ${{ fromJSON(inputs.deploy-runner) }}
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-${{ github.repository }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      deployments: write # GitHub Deployment record + status
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      APP_URL: ${{ inputs.url }}
+      DIGEST: ${{ inputs.digest }}
+    steps:
+      - name: Preconditions
+        run: |
+          case "$GITHUB_REF" in refs/heads/main|refs/tags/release-*) ;; *) echo "::error::deploys only from main or release-* tags (got $GITHUB_REF)"; exit 1;; esac
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::malformed digest"; exit 1; }
+          [[ "$ENVIRONMENT" =~ ^[a-z0-9-]{1,30}$ ]] || { echo "::error::bad environment name"; exit 1; }
+          [[ -z "$APP_URL" || "$APP_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
+
+      - id: record
+        name: Deployment record (in_progress)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+          body="$(jq -n --arg ref "$GITHUB_SHA" --arg env "$ENVIRONMENT" --arg digest "$DIGEST" \
+            '{ref: $ref, environment: $env, auto_merge: false, required_contexts: [], production_environment: ($env == "production"),
+              description: ("container " + $digest[0:19]), payload: {digest: $digest}}')"
+          id="$(api -X POST "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments" -d "$body" | jq -r .id)"
+          [[ "$id" =~ ^[0-9]+$ ]] || exit 1
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          api -X POST "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$id/statuses" \
+            -d "$(jq -n --arg log "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{state: "in_progress", log_url: $log}')" > /dev/null
+
+      - name: Ask the host to deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.deploy-ssh-key }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.deploy-known-hosts }}
+          SSH_HOST: ${{ inputs.ssh-host }}
+          SSH_USER: ${{ inputs.ssh-user }}
+        run: |
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ && "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "::error::bad ssh target"; exit 1; }
+          umask 077
+          key="$RUNNER_TEMP/deploy_key"; kh="$RUNNER_TEMP/known_hosts"
+          trap 'rm -f "$key" "$kh"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$kh"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$kh" \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "deploy $DIGEST" < /dev/null
+
+      - name: Smoke check
+        if: ${{ inputs.url != '' }}
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL")" && [ "$code" = 200 ] && { echo "$APP_URL: 200"; exit 0; }
+            sleep 5
+          done
+          echo "::error::$APP_URL answered $code"; exit 1
+
+      - name: Deployment record (result) + notify
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ID: ${{ steps.record.outputs.id }}
+          RESULT: ${{ job.status }}
+          NTFY_URL: ${{ secrets.ntfy-url }}
+        run: |
+          state=failure; [ "$RESULT" = success ] && state=success
+          if [[ "$ID" =~ ^[0-9]+$ ]]; then
+            curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$ID/statuses" \
+              -d "$(jq -n --arg s "$state" --arg url "$APP_URL" --arg log "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                    '{state: $s, log_url: $log} + (if $url != "" then {environment_url: $url} else {} end)')" > /dev/null \
+              || echo "::warning::could not update the deployment record"
+          else
+            echo "::warning::no deployment record (GitHub Deployments API unavailable for this repo?)"
+          fi
+          {
+            echo "### Deploy: $state"
+            echo "- environment: \`$ENVIRONMENT\`"
+            echo "- digest: \`$DIGEST\`"
+            echo "- commit: \`$GITHUB_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$NTFY_URL" ]; then
+            curl -fsS -H "Title: ${GITHUB_REPOSITORY#*/} -> $ENVIRONMENT: $state" -H "Tags: $([ "$state" = success ] && echo white_check_mark || echo rotating_light)" \
+              -d "${GITHUB_SHA:0:12} ${DIGEST:0:19}" "$NTFY_URL" > /dev/null || echo "::warning::ntfy failed"
+          fi

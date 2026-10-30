@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+#
+# app-deploy — generic container deployer for hosts in the homelab.
+# Generalised from solar's solar-deploy.sh. One script, one config per app:
+#
+#   /etc/app-deploy/<app>.conf     (root:root 0644, see app.conf.example)
+#
+# Two ways in, same gates:
+#
+#   push  (private repos)  The deploy runner connects over SSH. authorized_keys pins the
+#                          key to this script, the app and the runner's IP:
+#                            restrict,from="192.168.178.212",command="/usr/local/sbin/app-deploy tickets" ssh-ed25519 AAAA...
+#                          The runner can only *ask*: "deploy sha256:<digest>", "rollback", "status".
+#                          It never chooses the image repository — that is fixed in the config.
+#
+#   pull  (public repos)   A systemd timer runs `app-deploy <app>` with no command; the script
+#                          resolves :latest itself. No inbound access to the host at all.
+#
+# Gates, in order, before anything runs:
+#   1. signature    cosign verify — keyless: signed by security-pipeline's build-container.yml
+#                   for exactly this repository on refs/heads/main; key: org public key.
+#   2. pipeline     the image carries a CycloneDX SBOM attestation and SLSA provenance
+#                   (only build-container.yml produces both, after the Trivy gate passed)
+#   3. freshness    built strictly later than what runs (a signature says who built it,
+#                   not which build — this stops replaying an old, signed, vulnerable digest)
+# then: optional compose sync from the image, pre-deploy backup hook, switch, health wait,
+# automatic rollback of image and compose file.
+set -euo pipefail
+umask 022
+
+APP="${1:-}"
+[[ "$APP" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || { echo "usage: app-deploy <app>" >&2; exit 2; }
+CONF="/etc/app-deploy/${APP}.conf"
+[[ -f "$CONF" && "$(stat -c '%u' "$CONF")" == 0 ]] || { echo "missing or not root-owned: $CONF" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$CONF"
+
+: "${IMAGE:?IMAGE not set in $CONF}"            # e.g. ghcr.io/pascal-organisation/tickets
+: "${REPOSITORY:?REPOSITORY not set in $CONF}"  # e.g. Pascal-Organisation/tickets
+: "${DEPLOY_DIR:?DEPLOY_DIR not set in $CONF}"  # e.g. /srv/tickets
+: "${SERVICES:?SERVICES not set in $CONF}"      # space-separated compose services to health-wait for
+VERIFY_MODE="${VERIFY_MODE:-keyless}"            # keyless | key
+COSIGN_PUBKEY="${COSIGN_PUBKEY:-/etc/app-deploy/cosign.pub}"
+IMAGE_VAR="${IMAGE_VAR:-APP_IMAGE}"              # variable name compose reads the image from
+BUILT_VAR="${BUILT_VAR:-APP_BUILT_AT}"
+COMPOSE_FROM_IMAGE="${COMPOSE_FROM_IMAGE:-}"     # path inside the image, e.g. /app/deploy/docker-compose.yml
+BACKUP_HOOK="${BACKUP_HOOK:-}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
+MAX_RESTARTS="${MAX_RESTARTS:-3}"
+SIGNER_REGEXP='^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/build-container\.yml@'
+OIDC_ISSUER="https://token.actions.githubusercontent.com"
+
+IMAGE_ENV="${DEPLOY_DIR}/image.env"
+COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
+COMPOSE_PREV="${COMPOSE_FILE}.prev"
+COMPOSE=(docker compose --project-name "$APP" --project-directory "$DEPLOY_DIR" -f "$COMPOSE_FILE" --env-file "$IMAGE_ENV")
+
+log() { printf '%s app-deploy[%s]: %s\n' "$(date -Is)" "$APP" "$*"; }
+die() { log "ERROR: $*"; exit 1; }
+
+label() {
+  local v=""
+  v="$(docker image inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null)" || v=""
+  [[ "$v" == "<no value>" ]] && v=""
+  printf '%s' "$v"
+}
+to_epoch() { date -d "$1" +%s 2>/dev/null || true; }
+
+write_image_env() {
+  local tmp
+  tmp="$(mktemp "${IMAGE_ENV}.XXXXXX")"
+  printf '%s=%s\n%s=%s\n' "$IMAGE_VAR" "$1" "$BUILT_VAR" "$2" > "$tmp"
+  chmod 0644 "$tmp"
+  mv "$tmp" "$IMAGE_ENV"
+}
+
+read_current() {
+  current=""; cur_built=""
+  if [[ -f "$IMAGE_ENV" ]]; then
+    current="$(sed -n "s/^${IMAGE_VAR}=//p" "$IMAGE_ENV")"
+    cur_built="$(sed -n "s/^${BUILT_VAR}=//p" "$IMAGE_ENV")"
+  fi
+}
+
+verify() {
+  local ref="$1" mode=()
+  if [[ "$VERIFY_MODE" == keyless ]]; then
+    mode=(--certificate-identity-regexp "$SIGNER_REGEXP" --certificate-oidc-issuer "$OIDC_ISSUER"
+          --certificate-github-workflow-repository "$REPOSITORY" --certificate-github-workflow-ref refs/heads/main)
+  elif [[ "$VERIFY_MODE" == key ]]; then
+    mode=(--key "$COSIGN_PUBKEY" --insecure-ignore-tlog=true)
+  else
+    die "VERIFY_MODE must be keyless or key"
+  fi
+  cosign verify "${mode[@]}" "$ref" > /dev/null || return 1
+  cosign verify-attestation --type cyclonedx "${mode[@]}" "$ref" > /dev/null || return 1
+  cosign verify-attestation --type slsaprovenance1 "${mode[@]}" "$ref" > /dev/null || return 1
+}
+
+compose_synced=0
+sync_compose() {
+  [[ -n "$COMPOSE_FROM_IMAGE" ]] || return 0
+  local cid tmp
+  tmp="$(mktemp "${COMPOSE_FILE}.XXXXXX")"
+  cid="$(docker create "$candidate")" || { rm -f "$tmp"; die "docker create failed"; }
+  if docker cp "${cid}:${COMPOSE_FROM_IMAGE}" "$tmp" 2>/dev/null; then
+    docker rm "$cid" >/dev/null
+    if [[ -f "$COMPOSE_FILE" ]] && cmp -s "$tmp" "$COMPOSE_FILE"; then
+      rm -f "$tmp"
+    else
+      [[ -f "$COMPOSE_FILE" ]] && cp "$COMPOSE_FILE" "$COMPOSE_PREV"
+      chmod 0644 "$tmp"; mv "$tmp" "$COMPOSE_FILE"; compose_synced=1
+      log "compose file updated from the verified image"
+    fi
+  else
+    docker rm "$cid" >/dev/null 2>&1 || true; rm -f "$tmp"
+    die "image carries no ${COMPOSE_FROM_IMAGE}"
+  fi
+}
+
+rollback() {
+  log "$1; rolling back to ${current:-<none>}"
+  if [[ "$compose_synced" == 1 && -f "$COMPOSE_PREV" ]]; then cp "$COMPOSE_PREV" "$COMPOSE_FILE"; fi
+  if [[ -n "$current" ]]; then
+    write_image_env "$current" "$cur_built"
+    "${COMPOSE[@]}" up -d --remove-orphans || log "WARNING: rollback 'compose up' failed too"
+    die "rolled back to ${current}"
+  fi
+  die "no previous image to roll back to; left in place for inspection"
+}
+
+wait_healthy() {
+  local deadline cid state restarts healthy svc
+  read -r -a svcs <<< "$SERVICES"
+  log "waiting up to ${HEALTH_TIMEOUT}s for ${SERVICES} ..."
+  deadline=$(( SECONDS + HEALTH_TIMEOUT ))
+  while (( SECONDS < deadline )); do
+    healthy=0
+    for svc in "${svcs[@]}"; do
+      cid="$("${COMPOSE[@]}" ps -q "$svc")"
+      [[ -n "$cid" ]] || rollback "${svc} container was not created"
+      state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}' "$cid" 2>/dev/null || echo unknown)"
+      restarts="$(docker inspect -f '{{.RestartCount}}' "$cid" 2>/dev/null || echo 0)"
+      (( restarts >= MAX_RESTARTS )) && rollback "${svc} is crash-looping"
+      [[ "$state" == unhealthy ]] && rollback "${svc} is unhealthy"
+      [[ "$state" == nohealthcheck ]] && rollback "${svc} has no healthcheck; refusing to deploy blind"
+      [[ "$state" == healthy ]] && healthy=$(( healthy + 1 ))
+    done
+    (( healthy == ${#svcs[@]} )) && return 0
+    sleep 5
+  done
+  rollback "new release did not become healthy in time"
+}
+
+# ---- what was asked ---------------------------------------------------------
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+want_digest=""
+case "$cmd" in
+  "")                 ;;   # timer / pull mode
+  "status")           read_current; echo "running: ${current:-<none>} (built ${cur_built:-?})"; exit 0 ;;
+  "rollback")
+      [[ -f "${IMAGE_ENV}.prev" ]] || die "no previous release recorded"
+      cp "${IMAGE_ENV}.prev" "$IMAGE_ENV"; "${COMPOSE[@]}" up -d --remove-orphans
+      log "rolled back to $(sed -n "s/^${IMAGE_VAR}=//p" "$IMAGE_ENV")"; exit 0 ;;
+  deploy\ sha256:*)
+      want_digest="${cmd#deploy }"
+      [[ "$want_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || die "malformed digest" ;;
+  *)                  die "command not allowed: ${cmd:0:80}" ;;
+esac
+
+exec 9>"${DEPLOY_DIR}/.deploy.lock"
+flock -w 120 9 || die "another deploy is still running"
+read_current
+
+if [[ -n "$want_digest" ]]; then
+  candidate="${IMAGE}@${want_digest}"
+  docker pull --quiet "$candidate" >/dev/null || die "could not pull $candidate"
+else
+  docker pull --quiet "${IMAGE}:latest" >/dev/null || die "could not pull ${IMAGE}:latest"
+  candidate="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${IMAGE}:latest" \
+    | grep "^${IMAGE}@" | head -1)"
+  [[ -n "$candidate" ]] || die "could not resolve a digest for ${IMAGE}:latest"
+fi
+digest="${candidate#*@}"
+
+if [[ "$candidate" == "$current" ]]; then log "already running ${digest}"; exit 0; fi
+
+# Gate 1+2: authenticity and pipeline provenance, against the digest, before anything runs.
+log "verifying signature + attestations for ${digest} (${VERIFY_MODE}) ..."
+if ! verify "$candidate"; then
+  docker rmi "$candidate" >/dev/null 2>&1 || true
+  die "verification FAILED for ${candidate}; refusing to deploy"
+fi
+
+# Gate 3: freshness.
+cand_built="$(label "$candidate" org.opencontainers.image.created)"
+cand_epoch="$(to_epoch "$cand_built")"
+[[ -n "$cand_epoch" ]] || die "candidate has no usable build timestamp; refusing"
+if [[ -n "$cur_built" ]]; then
+  cur_epoch="$(to_epoch "$cur_built")"
+  if [[ -n "$cur_epoch" ]] && (( cand_epoch <= cur_epoch )); then
+    die "candidate built ${cand_built} is not newer than running ${cur_built}; refusing (replayed digest?)"
+  fi
+fi
+
+log "verified; deploying ${digest} (commit $(label "$candidate" org.opencontainers.image.revision | cut -c1-12), built ${cand_built})"
+sync_compose
+
+if [[ -n "$current" && -n "$BACKUP_HOOK" && "${SKIP_BACKUP:-0}" != 1 ]]; then
+  "$BACKUP_HOOK" || die "pre-deploy backup failed; refusing to deploy"
+fi
+
+[[ -f "$IMAGE_ENV" ]] && cp "$IMAGE_ENV" "${IMAGE_ENV}.prev"
+write_image_env "$candidate" "$cand_built"
+"${COMPOSE[@]}" up -d --remove-orphans || rollback "compose up failed"
+wait_healthy
+
+log "healthy; deployed ${digest}"
+# keep the running and the previous image, drop the rest
+keep="$(docker image inspect -f '{{.Id}}' "$candidate" "${current:-$candidate}" 2>/dev/null | sort -u)" || true
+while read -r id; do
+  [[ -n "$id" ]] || continue
+  grep -qxF "$id" <<<"$keep" && continue
+  docker rmi "$id" >/dev/null 2>&1 || true
+done < <(docker image ls -aq --no-trunc --filter "reference=${IMAGE}" | sort -u)

@@ -1,0 +1,214 @@
+## Static site deploy — reusable. PRIVATE repos only (deploy runner is self-hosted).
+##
+## The caller builds the site in its own CI job and uploads it as an artifact
+## (a single .tgz). This workflow only ships that artifact, on the deploy runner:
+##
+##   transport: ssh   ssh <user>@<host> "<command> <sha>" < site.tgz
+##                    authorized_keys on the target pins the key to a receive script
+##                    (e.g. hugo-receive on CT 107) and to the runner's IP.
+##   transport: ftps  upload every file over FTPS (shared hosting, e.g. all-inkl);
+##                    no deletes, ever — a deploy that can delete eventually deletes
+##                    the wrong thing.
+##
+## The artifact's SHA-256 is recorded in the deployment payload and the job summary,
+## so "what is live" can be checked against the build later.
+## DAST runs in dast.yml — before this job against staging, or after it against live.
+name: deploy-static (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        type: string
+        default: site
+      artifact-file:
+        type: string
+        default: site.tgz
+      transport:
+        description: "ssh | ftps"
+        type: string
+        required: true
+      ssh-host:
+        type: string
+        default: ""
+      ssh-user:
+        type: string
+        default: deploy
+      ssh-command:
+        description: "Command the receive script expects; the commit SHA is appended."
+        type: string
+        default: deploy
+      ftps-remote-dir:
+        type: string
+        default: ""
+      environment:
+        type: string
+        default: production
+      url:
+        description: "Public URL for the deployment record and the smoke check. Empty skips the check."
+        type: string
+        default: ""
+      deploy-runner:
+        type: string
+        default: '["self-hosted","deploy"]'
+    secrets:
+      deploy-ssh-key:
+        required: false
+      deploy-known-hosts:
+        required: false
+      ftp-host:
+        required: false
+      ftp-user:
+        required: false
+      ftp-pass:
+        required: false
+      ntfy-url:
+        required: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    if: ${{ github.event.repository.private }}
+    runs-on: ${{ fromJSON(inputs.deploy-runner) }}
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-${{ github.repository }}-${{ inputs.environment }}
+      cancel-in-progress: false   # never cut a deploy off mid-upload
+    permissions:
+      deployments: write # GitHub Deployment record + status
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      APP_URL: ${{ inputs.url }}
+      FILE: ${{ inputs.artifact-file }}
+    steps:
+      - name: Preconditions
+        env:
+          TRANSPORT: ${{ inputs.transport }}
+        run: |
+          case "$GITHUB_REF" in refs/heads/main|refs/tags/release-*) ;; *) echo "::error::deploys only from main or release-* tags (got $GITHUB_REF)"; exit 1;; esac
+          case "$TRANSPORT" in ssh|ftps) ;; *) echo "::error::transport must be ssh or ftps"; exit 1;; esac
+          [[ "$ENVIRONMENT" =~ ^[a-z0-9-]{1,30}$ ]] || { echo "::error::bad environment name"; exit 1; }
+          [[ "$FILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::bad artifact-file"; exit 1; }
+          [[ -z "$APP_URL" || "$APP_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact-name }}
+
+      - name: Inspect artifact
+        run: |
+          [ -s "$FILE" ] || { echo "::error::$FILE missing or empty"; exit 1; }
+          # Only regular files and directories, no absolute paths, no '..', no links.
+          if tar -tvzf "$FILE" | awk '{print substr($1,1,1)}' | grep -qv '^[-d]$'; then
+            echo "::error::archive contains links or special files"; exit 1
+          fi
+          if tar -tzf "$FILE" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+            echo "::error::archive contains absolute or parent paths"; exit 1
+          fi
+          tar -tzf "$FILE" | grep -qE '(^|/)index\.html$' || { echo "::error::no index.html in archive"; exit 1; }
+          echo "SHA256=$(sha256sum "$FILE" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - id: record
+        name: Deployment record (in_progress)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+          body="$(jq -n --arg ref "$GITHUB_SHA" --arg env "$ENVIRONMENT" --arg sha256 "$SHA256" \
+            '{ref: $ref, environment: $env, auto_merge: false, required_contexts: [], production_environment: ($env == "production"),
+              description: ("static " + $sha256[0:12]), payload: {artifact_sha256: $sha256}}')"
+          id="$(api -X POST "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments" -d "$body" | jq -r .id)"
+          [[ "$id" =~ ^[0-9]+$ ]] || exit 1
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          api -X POST "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$id/statuses" \
+            -d "$(jq -n --arg log "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{state: "in_progress", log_url: $log}')" > /dev/null
+
+      - name: Ship over SSH
+        if: ${{ inputs.transport == 'ssh' }}
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.deploy-ssh-key }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.deploy-known-hosts }}
+          SSH_HOST: ${{ inputs.ssh-host }}
+          SSH_USER: ${{ inputs.ssh-user }}
+          SSH_COMMAND: ${{ inputs.ssh-command }}
+        run: |
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ && "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ && "$SSH_COMMAND" =~ ^[a-z][a-z0-9-]*$ ]] \
+            || { echo "::error::bad ssh target/command"; exit 1; }
+          [ -n "$DEPLOY_SSH_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] || { echo "::error::deploy-ssh-key / deploy-known-hosts not set"; exit 1; }
+          umask 077
+          key="$RUNNER_TEMP/deploy_key"; kh="$RUNNER_TEMP/known_hosts"
+          trap 'rm -f "$key" "$kh"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$kh"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$kh" \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "$SSH_COMMAND $GITHUB_SHA" < "$FILE"
+
+      - name: Ship over FTPS
+        if: ${{ inputs.transport == 'ftps' }}
+        env:
+          FTP_HOST: ${{ secrets.ftp-host }}
+          FTP_USER: ${{ secrets.ftp-user }}
+          FTP_PASS: ${{ secrets.ftp-pass }}
+          REMOTE_DIR: ${{ inputs.ftps-remote-dir }}
+        run: |
+          [ -n "$FTP_HOST" ] && [ -n "$FTP_USER" ] && [ -n "$FTP_PASS" ] || { echo "::error::ftp-* secrets not set"; exit 1; }
+          REMOTE_DIR="${REMOTE_DIR%/}"
+          [[ "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]*$ && "$REMOTE_DIR" != *..* ]] || { echo "::error::bad ftps-remote-dir"; exit 1; }
+          src="$RUNNER_TEMP/site" && rm -rf "$src" && mkdir -p "$src"
+          tar -xzf "$FILE" -C "$src" --no-same-owner --no-same-permissions
+          umask 077
+          netrc="$(mktemp)"; err="$(mktemp)"
+          trap 'rm -f "$netrc" "$err"; rm -rf "$src"' EXIT
+          printf 'machine %s login %s password %s\n' "$FTP_HOST" "$FTP_USER" "$FTP_PASS" > "$netrc"
+          fail=0; n=0
+          while IFS= read -r -d '' f; do
+            rel="${f#"$src"/}"; n=$((n+1))
+            if ! curl --silent --show-error --fail --ssl-reqd --netrc-file "$netrc" --ftp-create-dirs \
+                 --upload-file "$f" "ftp://$FTP_HOST$REMOTE_DIR/$rel" 2>"$err"; then
+              echo "FAILED: $rel"; sed 's/^/    /' "$err"; fail=$((fail+1))
+            fi
+          done < <(find "$src" -type f -print0 | sort -z)
+          echo "uploaded $((n-fail))/$n files to $REMOTE_DIR"
+          [ "$fail" -eq 0 ]
+
+      - name: Smoke check
+        if: ${{ inputs.url != '' }}
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL")" && [ "$code" = 200 ] && { echo "$APP_URL: 200"; exit 0; }
+            sleep 5
+          done
+          echo "::error::$APP_URL answered $code"; exit 1
+
+      - name: Deployment record (result) + notify
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ID: ${{ steps.record.outputs.id }}
+          RESULT: ${{ job.status }}
+          NTFY_URL: ${{ secrets.ntfy-url }}
+        run: |
+          state=failure; [ "$RESULT" = success ] && state=success
+          if [[ "$ID" =~ ^[0-9]+$ ]]; then
+            curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$ID/statuses" \
+              -d "$(jq -n --arg s "$state" --arg url "$APP_URL" --arg log "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                    '{state: $s, log_url: $log} + (if $url != "" then {environment_url: $url} else {} end)')" > /dev/null \
+              || echo "::warning::could not update the deployment record"
+          else
+            echo "::warning::no deployment record (GitHub Deployments API unavailable for this repo?)"
+          fi
+          {
+            echo "### Deploy: $state"
+            echo "- environment: \`$ENVIRONMENT\`"
+            echo "- artifact sha256: \`${SHA256:-?}\`"
+            echo "- commit: \`$GITHUB_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$NTFY_URL" ]; then
+            curl -fsS -H "Title: ${GITHUB_REPOSITORY#*/} -> $ENVIRONMENT: $state" -H "Tags: $([ "$state" = success ] && echo white_check_mark || echo rotating_light)" \
+              -d "${GITHUB_SHA:0:12}" "$NTFY_URL" > /dev/null || echo "::warning::ntfy failed"
+          fi

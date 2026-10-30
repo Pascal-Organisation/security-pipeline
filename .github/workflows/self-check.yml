@@ -1,0 +1,39 @@
+## This repo runs its own CI gate on itself (dogfooding), plus shellcheck for the
+## host-side deployer. Public repo -> GitHub-hosted runners only.
+name: Self-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"   # weekly full-history secret scan + fresh CVE data
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: self-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      actions: read # CodeQL needs workflow run metadata
+      security-events: write # upload CodeQL results
+    with:
+      codeql-languages: actions
+
+  shellcheck:
+    name: shellcheck (deployer)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck --severity=warning deployer/app-deploy

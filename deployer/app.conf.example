@@ -1,0 +1,27 @@
+# /etc/app-deploy/<app>.conf — root:root 0644. Sourced by app-deploy.
+# Copy, rename to the app name (tickets.conf, solar.conf, ...), adjust.
+
+# Image repository the host will EVER run for this app. Fixed here, never taken from the runner.
+IMAGE=ghcr.io/pascal-organisation/tickets
+# Repository whose main branch must have built the image (keyless check).
+REPOSITORY=Pascal-Organisation/tickets
+
+# keyless = public repos (Sigstore/Fulcio, GitHub OIDC identity)
+# key     = private repos (org Cosign key pair, public key below)
+VERIFY_MODE=key
+COSIGN_PUBKEY=/etc/app-deploy/cosign.pub
+
+DEPLOY_DIR=/srv/tickets
+SERVICES="ticket-watcher"
+
+# Variable names compose reads from ${DEPLOY_DIR}/image.env
+# (solar keeps its historic names: IMAGE_VAR=SOLAR_IMAGE, BUILT_VAR=SOLAR_BUILT_AT)
+IMAGE_VAR=APP_IMAGE
+BUILT_VAR=APP_BUILT_AT
+
+# Optional: compose file shipped inside the image, so compose changes deploy with the code.
+COMPOSE_FROM_IMAGE=
+# Optional: executable run before switching (exit != 0 aborts the deploy).
+BACKUP_HOOK=
+HEALTH_TIMEOUT=300
+MAX_RESTARTS=3

@@ -1,0 +1,248 @@
+## Container release — reusable. Call only from push to main (after ci.yml passed).
+##
+##   build  : docker build -> Trivy image gate -> Syft SBOM (CycloneDX) -> push to GHCR
+##            -> SLSA v1 provenance predicate for the pushed digest
+##   sign   : public  -> keyless Cosign (GitHub OIDC -> Fulcio, logged in Rekor)
+##            private -> Cosign key pair, NOT uploaded to the public transparency log
+##            (keyless would publish repo + workflow names of a private repo in Rekor)
+##
+## The image that is pushed is byte-for-byte the tar Trivy scanned — tag and push,
+## never a rebuild. Signing jobs never run third-party scanners, and only the public
+## one can mint an OIDC token.
+##
+## Outputs image + digest so the caller can hand the digest to deploy-container.yml.
+name: build-container (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      private-runner:
+        description: 'runs-on for PRIVATE repos, as JSON. Ignored for public repos.'
+        type: string
+        default: '["self-hosted","ci"]'
+      context:
+        type: string
+        default: "."
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+      target:
+        description: "Optional build stage (docker build --target)."
+        type: string
+        default: ""
+    secrets:
+      cosign-private-key:
+        description: "Private repos: Cosign private key (PEM). Org secret COSIGN_PRIVATE_KEY."
+        required: false
+      cosign-password:
+        required: false
+    outputs:
+      image:
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions: {}
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
+
+jobs:
+  build:
+    name: Build, scan, SBOM, push
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # push image, signatures and attestations to GHCR
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Isolated docker config: the registry login never lands in the runner user's ~/.docker.
+      - name: Isolate docker config
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-config"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          CONTEXT: ${{ inputs.context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          for v in "$CONTEXT" "$DOCKERFILE" "$TARGET"; do
+            case "$v" in *..*|/*|*[!A-Za-z0-9_./-]*) echo "::error::input '$v' not allowed"; exit 1;; esac
+          done
+          LOCAL="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "LOCAL=$LOCAL" >> "$GITHUB_ENV"
+          echo "TAR=$RUNNER_TEMP/image.tar" >> "$GITHUB_ENV"
+          target=() ; [ -n "$TARGET" ] && target=(--target "$TARGET")
+          # org.opencontainers.image.created is load-bearing: host deployers refuse any
+          # image not built strictly later than the one running (replay protection).
+          docker build -f "$DOCKERFILE" "${target[@]}" \
+            --build-arg GIT_SHA="$GITHUB_SHA" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            -t "$LOCAL" "$CONTEXT"
+          docker save "$LOCAL" -o "$RUNNER_TEMP/image.tar"
+
+      # Gate: fixable HIGH/CRITICAL vulnerabilities and any embedded secret.
+      # Report: everything else. Exceptions live in .trivyignore.yaml (with expired_at).
+      - name: Trivy image (gate + report)
+        run: |
+          ignore=() ; [ -f .trivyignore.yaml ] && ignore=(--ignorefile /src/.trivyignore.yaml)
+          trivy() { docker run --rm -v "$TAR:/img.tar:ro" -v "$PWD:/src:ro" -v trivy-cache:/root/.cache "$TRIVY_IMAGE" "$@"; }
+          echo "::group::Full report (not gating)"
+          trivy image --input /img.tar --scanners vuln,secret --exit-code 0 "${ignore[@]}"
+          echo "::endgroup::"
+          trivy image --input /img.tar --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --skip-db-update "${ignore[@]}"
+
+      - name: SBOM (CycloneDX)
+        run: |
+          mkdir -p "$RUNNER_TEMP/attest"
+          docker run --rm -v "$TAR:/img.tar:ro" "$SYFT_IMAGE" \
+            docker-archive:/img.tar -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
+          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "$RUNNER_TEMP/attest/sbom.cdx.json" > /dev/null
+
+      - id: push
+        name: Push to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for tag in latest "sha-${GITHUB_SHA}"; do
+            docker tag "$LOCAL" "${IMAGE}:${tag}"
+            docker push --quiet "${IMAGE}:${tag}"
+          done
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${IMAGE}:latest" \
+            | grep "^${IMAGE}@" | head -1 | cut -d@ -f2)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::could not resolve the pushed digest"; exit 1; }
+          docker logout ghcr.io
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      # SLSA v1 provenance (build L2: hosted build platform, signed provenance).
+      # L3 would need an isolated builder (slsa-github-generator on GitHub-hosted runners).
+      - name: Provenance predicate
+        env:
+          BUILDER: https://github.com/Pascal-Organisation/security-pipeline/.github/workflows/build-container.yml
+          REPO_ID: ${{ github.repository_id }}
+          OWNER_ID: ${{ github.repository_owner_id }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          jq -n \
+            --arg builder "$BUILDER" --arg repo "$GITHUB_REPOSITORY" --arg ref "$GITHUB_REF" --arg sha "$GITHUB_SHA" \
+            --arg path "${WORKFLOW_REF#*/*/}" --arg event "$GITHUB_EVENT_NAME" --arg repo_id "$REPO_ID" \
+            --arg owner_id "$OWNER_ID" --arg runner_env "$RUNNER_ENVIRONMENT" \
+            --arg invocation "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            '{
+              buildDefinition: {
+                buildType: "https://actions.github.io/buildtypes/workflow/v1",
+                externalParameters: { workflow: { ref: $ref, repository: ("https://github.com/" + $repo), path: ($path | sub("@.*$"; "")) } },
+                internalParameters: { github: { event_name: $event, repository_id: $repo_id, repository_owner_id: $owner_id, runner_environment: $runner_env } },
+                resolvedDependencies: [ { uri: ("git+https://github.com/" + $repo + "@" + $ref), digest: { gitCommit: $sha } } ]
+              },
+              runDetails: { builder: { id: $builder }, metadata: { invocationId: $invocation } }
+            }' > "$RUNNER_TEMP/attest/provenance.json"
+          echo "$IMAGE@$DIGEST" > "$RUNNER_TEMP/attest/subject.txt"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attestations
+          path: ${{ runner.temp }}/attest/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Clean up
+        if: always()
+        run: |
+          rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar"
+          docker image rm -f "$LOCAL" >/dev/null 2>&1 || true
+
+  sign-keyless:
+    name: Sign & attest (keyless, public)
+    needs: build
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write # push image, signatures and attestations to GHCR
+      id-token: write # OIDC token for Sigstore keyless signing
+    env:
+      REF: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: attestations
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign, attest SBOM + provenance, verify
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ "$(cat subject.txt)" = "$REF" ] || { echo "::error::attestation subject mismatch"; exit 1; }
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" && mkdir -p "$DOCKER_CONFIG"
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "$REF"
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$REF"
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$REF"
+          # Exactly what a host deployer checks: signed by THIS reusable workflow, for
+          # this repository, from main.
+          cosign verify "$REF" \
+            --certificate-identity-regexp '^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/build-container\.yml@' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref refs/heads/main > /dev/null
+          docker logout ghcr.io
+          echo "Signed $REF (keyless)" >> "$GITHUB_STEP_SUMMARY"
+
+  sign-key:
+    name: Sign & attest (key pair, private)
+    needs: build
+    if: ${{ github.event.repository.private }}
+    runs-on: ${{ fromJSON(inputs.private-runner) }}
+    timeout-minutes: 10
+    permissions:
+      packages: write # push image, signatures and attestations to GHCR
+    env:
+      REF: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: attestations
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # --use-signing-config=false + --tlog-upload=false: nothing about this private
+      # repo is written to the public Rekor log. Hosts verify with the public key and
+      # --insecure-ignore-tlog=true.
+      - name: Sign, attest SBOM + provenance, verify
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.cosign-private-key }}
+          COSIGN_PASSWORD: ${{ secrets.cosign-password }}
+        run: |
+          [ -n "$COSIGN_PRIVATE_KEY" ] || { echo "::error::secret cosign-private-key is not set"; exit 1; }
+          [ "$(cat subject.txt)" = "$REF" ] || { echo "::error::attestation subject mismatch"; exit 1; }
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" && mkdir -p "$DOCKER_CONFIG"
+          trap 'rm -f "$RUNNER_TEMP/cosign.pub"; docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          offline=(--key env://COSIGN_PRIVATE_KEY --use-signing-config=false --tlog-upload=false --yes)
+          cosign sign "${offline[@]}" "$REF"
+          cosign attest "${offline[@]}" --type cyclonedx --predicate sbom.cdx.json "$REF"
+          cosign attest "${offline[@]}" --type slsaprovenance1 --predicate provenance.json "$REF"
+          cosign public-key --key env://COSIGN_PRIVATE_KEY > "$RUNNER_TEMP/cosign.pub"
+          cosign verify --key "$RUNNER_TEMP/cosign.pub" --insecure-ignore-tlog=true "$REF" > /dev/null
+          echo "Signed $REF (key pair, no tlog)" >> "$GITHUB_STEP_SUMMARY"

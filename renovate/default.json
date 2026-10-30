@@ -1,0 +1,69 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Shared Renovate preset for Pascal-Organisation. Use in a repo's renovate.json: { \"extends\": [\"github>Pascal-Organisation/security-pipeline//renovate/default\"] }",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Europe/Berlin",
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "prHourlyLimit": 4,
+  "pre-commit": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Small, aged updates merge themselves once every required check is green. Branch automerge: works without branch protection (private repos on GitHub Free).",
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Majors always get a human look.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["major-update"]
+    },
+    {
+      "description": "Our own reusable workflows: reviewed by hand, no waiting period.",
+      "matchPackageNames": ["Pascal-Organisation/security-pipeline"],
+      "minimumReleaseAge": "0 days",
+      "automerge": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "image:tag@sha256 pins inside workflow env/run lines and shell scripts (Dependabot cannot see these).",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/\\.sh$/",
+        "/(^|/)deployer/app-deploy$/"
+      ],
+      "matchStrings": [
+        "(?<depName>(?:[a-z0-9.-]+\\.[a-z]{2,}/)?[a-z0-9][a-z0-9._/-]*):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "autoReplaceStringTemplate": "{{depName}}:{{newValue}}@{{newDigest}}"
+    },
+    {
+      "customType": "regex",
+      "description": "zizmor pinned by version in workflow env.",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["ZIZMOR_VERSION: \"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "zizmor",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "bandit pinned by version in workflow env.",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["BANDIT_VERSION: \"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "bandit",
+      "datasourceTemplate": "pypi"
+    }
+  ]
+}

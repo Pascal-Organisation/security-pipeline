@@ -1,0 +1,104 @@
+## DAST — reusable. Scans a running site from the outside.
+##
+##   OWASP ZAP baseline   spiders the site and checks responses passively (headers, cookies,
+##                        CSP, information leaks). No attack traffic.
+##   Nuclei               template checks for known misconfigurations, exposed files/panels,
+##                        TLS problems and known CVEs of the detected stack.
+##
+## Gate: any High ZAP alert or high/critical Nuclei finding fails the job.
+## Everything else is in the job summary and the uploaded reports.
+##
+## Call it against staging BEFORE the production deploy where a staging target exists
+## (websiteghana: /release-test), otherwise right after the deploy against live.
+## Only point it at sites you own.
+name: dast (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      url:
+        type: string
+        required: true
+      private-runner:
+        description: 'runs-on for PRIVATE repos, as JSON. Ignored for public repos.'
+        type: string
+        default: '["self-hosted","ci"]'
+      zap-minutes:
+        description: "ZAP spider duration in minutes."
+        type: number
+        default: 2
+
+permissions: {}
+
+env:
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.16.1@sha256:7840969c7c9fead565bf9734b12f49f6886db90b1d35b1f74d79710bbd081dab
+  NUCLEI_IMAGE: projectdiscovery/nuclei:v3.11.1@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb
+
+jobs:
+  zap:
+    name: ZAP baseline
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    permissions: {}
+    env:
+      TARGET: ${{ inputs.url }}
+      MINUTES: ${{ inputs.zap-minutes }}
+    steps:
+      - name: ZAP baseline (block on High)
+        run: |
+          [[ "$TARGET" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
+          [[ "$MINUTES" =~ ^[0-9]{1,2}$ ]] || { echo "::error::bad zap-minutes"; exit 1; }
+          out="$RUNNER_TEMP/zap" && mkdir -p "$out" && chmod 0777 "$out"   # container runs as uid zap
+          # -I: warnings alone do not fail the scan; the gate below decides.
+          docker run --rm -v "$out:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t "$TARGET" -m "$MINUTES" -I -J zap.json -r zap.html || true
+          [ -s "$out/zap.json" ] || { echo "::error::ZAP produced no report"; exit 1; }
+          {
+            echo "### ZAP baseline — $TARGET"
+            jq -r '.site[].alerts[] | "- **\(.riskdesc)** \(.alert) (\(.count) URL(s))"' "$out/zap.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          high="$(jq '[.site[].alerts[] | select(.riskcode == "3")] | length' "$out/zap.json")"
+          echo "ZAP High alerts: $high"
+          [ "$high" -eq 0 ] || { echo "::error::ZAP found $high High-risk alert(s)"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: dast-zap
+          path: ${{ runner.temp }}/zap/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  nuclei:
+    name: Nuclei
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    permissions: {}
+    env:
+      TARGET: ${{ inputs.url }}
+    steps:
+      - name: Nuclei (block on high/critical)
+        run: |
+          [[ "$TARGET" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
+          out="$RUNNER_TEMP/nuclei" && mkdir -p "$out"
+          # Rate-limited, no fuzzing/intrusive templates: misconfig, exposure, TLS, known CVEs.
+          docker run --rm -v "$out:/out" "$NUCLEI_IMAGE" \
+            -u "$TARGET" -tags misconfig,exposure,ssl,cve,tech \
+            -exclude-tags intrusive,fuzz,dos \
+            -rl 20 -c 10 -silent -nc -jsonl -o /out/nuclei.jsonl || true
+          touch "$out/nuclei.jsonl"
+          {
+            echo "### Nuclei — $TARGET"
+            jq -r '"- **\(.info.severity)** \(.info.name) — \(."matched-at")"' "$out/nuclei.jsonl"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bad="$(jq -s '[.[] | select(.info.severity == "high" or .info.severity == "critical")] | length' "$out/nuclei.jsonl")"
+          echo "Nuclei high/critical: $bad"
+          [ "$bad" -eq 0 ] || { echo "::error::Nuclei found $bad high/critical issue(s)"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: dast-nuclei
+          path: ${{ runner.temp }}/nuclei/
+          retention-days: 30
+          if-no-files-found: ignore

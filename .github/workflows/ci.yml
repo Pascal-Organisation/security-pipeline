@@ -1,0 +1,231 @@
+## CI gate — reusable. Every repo in Pascal-Organisation calls this on pull_request
+## and on push. Nothing here builds a release or touches a host.
+##
+## Visibility is never taken from an input: it is read from the repository the run
+## belongs to (github.event.repository.private). A public repo therefore ALWAYS runs on
+## GitHub-hosted runners, whatever the caller passes — fork PRs can never reach the
+## self-hosted runners on the Proxmox host.
+##
+##   public  -> ubuntu-24.04, CodeQL
+##   private -> inputs.private-runner (self-hosted CI runner), Semgrep (+ Bandit for Python)
+##
+## Gates (fail the job): workflow lint (actionlint + zizmor >= medium), verified/unknown
+## secrets (TruffleHog), SAST errors, fixable HIGH/CRITICAL vulnerabilities and
+## HIGH/CRITICAL misconfigurations (Trivy), hadolint errors.
+## Report-only: everything below those thresholds, licences.
+name: ci (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      private-runner:
+        description: 'runs-on for PRIVATE repos, as JSON, e.g. ["self-hosted","ci"]. Ignored for public repos.'
+        type: string
+        default: '["self-hosted","ci"]'
+      codeql-languages:
+        description: "Public repos only: CodeQL languages, comma-separated (e.g. python,actions). Empty skips CodeQL."
+        type: string
+        default: "actions"
+      python-paths:
+        description: "Space-separated paths for Bandit (private Python repos). Empty skips Bandit."
+        type: string
+        default: ""
+      dockerfile:
+        description: "Path to the Dockerfile for hadolint. Empty skips hadolint."
+        type: string
+        default: ""
+      trivy-skip-dirs:
+        description: "Comma-separated directories Trivy should skip (e.g. src/themes)."
+        type: string
+        default: ""
+
+permissions: {}
+
+env:
+  # Renovate keeps these tag@digest pins current (see renovate/default.json).
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+  PYTHON_IMAGE: python:3.13-slim-trixie@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb
+  SEMGREP_IMAGE: semgrep/semgrep:1.183.0@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0
+  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+  ZIZMOR_VERSION: "1.31.1"
+  BANDIT_VERSION: "1.9.4"
+
+jobs:
+  workflow-lint:
+    name: Workflow lint (actionlint + zizmor)
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color
+
+      # Via pip, not the zizmor OCI image: that binary needs x86-64-v2 and crashes on
+      # Proxmox's default kvm64 vCPU (see websiteghana history).
+      - name: zizmor (fail on medium and above)
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" -w /repo "$PYTHON_IMAGE" sh -euc '
+            python -m venv /tmp/v
+            /tmp/v/bin/pip install -q "zizmor==$0"
+            /tmp/v/bin/zizmor --offline --min-severity medium .github/workflows/
+          ' "$ZIZMOR_VERSION"
+
+  secrets:
+    name: Secret scan (TruffleHog)
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # PR: the PR's commits. Push: the pushed commits. schedule/dispatch: full history.
+      # verified = key still works; unknown = could not be checked. Both block.
+      - name: TruffleHog
+        uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2 # v3.99.7
+        with:
+          extra_args: --results=verified,unknown
+
+  codeql:
+    name: SAST (CodeQL)
+    if: ${{ !github.event.repository.private && inputs.codeql-languages != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # CodeQL needs workflow run metadata
+      security-events: write # upload CodeQL results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ inputs.codeql-languages }}
+          build-mode: none
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: codeql
+
+  semgrep:
+    name: SAST (Semgrep)
+    if: ${{ github.event.repository.private }}
+    runs-on: ${{ fromJSON(inputs.private-runner) }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ERROR findings block, WARNING/INFO are listed in the job summary only.
+      # The CI runner needs egress to semgrep.dev for the p/default rule pack.
+      - name: Semgrep (block on ERROR)
+        run: |
+          out="$RUNNER_TEMP/semgrep" && mkdir -p "$out"
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/src:ro" -v "$out:/out" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --config p/default --metrics=off --quiet \
+              --json-output=/out/semgrep.json --sarif-output=/out/semgrep.sarif
+          {
+            echo "### Semgrep"
+            jq -r '.results[] | "- **\(.extra.severity)** `\(.check_id)` \(.path):\(.start.line)"' "$out/semgrep.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          errors="$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' "$out/semgrep.json")"
+          echo "Semgrep ERROR findings: $errors"
+          [ "$errors" -eq 0 ] || { echo "::error::Semgrep found $errors ERROR-severity issue(s)"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: semgrep-report
+          path: ${{ runner.temp }}/semgrep/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  bandit:
+    name: SAST (Bandit)
+    if: ${{ github.event.repository.private && inputs.python-paths != '' }}
+    runs-on: ${{ fromJSON(inputs.private-runner) }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # High severity with at least medium confidence blocks; the full list is printed.
+      - name: Bandit
+        env:
+          PATHS: ${{ inputs.python-paths }}
+        run: |
+          case "$PATHS" in *[!A-Za-z0-9_./\ -]*) echo "::error::python-paths has unexpected characters"; exit 1;; esac
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e PATHS="$PATHS" \
+            -v "$PWD:/src:ro" -w /src "$PYTHON_IMAGE" sh -euc '
+              python -m venv /tmp/v
+              /tmp/v/bin/pip install -q "bandit==$0"
+              /tmp/v/bin/bandit -q -r $PATHS --exit-zero
+              /tmp/v/bin/bandit -q -r $PATHS --severity-level high --confidence-level medium
+            ' "$BANDIT_VERSION"
+
+  trivy:
+    name: Dependencies, IaC & licences (Trivy)
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Accepted findings go into the repo's .trivyignore.yaml, each with a reason and
+      # an expired_at date — an exception that is never revisited stops being one.
+      - name: Trivy fs (gate + report)
+        env:
+          SKIP_DIRS: ${{ inputs.trivy-skip-dirs }}
+        run: |
+          case "$SKIP_DIRS" in *[!A-Za-z0-9_./,-]*) echo "::error::trivy-skip-dirs has unexpected characters"; exit 1;; esac
+          skip=() ; [ -n "$SKIP_DIRS" ] && skip=(--skip-dirs "$SKIP_DIRS")
+          ignore=() ; [ -f .trivyignore.yaml ] && ignore=(--ignorefile .trivyignore.yaml)
+          trivy() { docker run --rm -v "$PWD:/src:ro" -w /src -v trivy-cache:/root/.cache "$TRIVY_IMAGE" "$@"; }
+
+          echo "::group::Full report (not gating)"
+          trivy fs --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" .
+          echo "::endgroup::"
+
+          trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --skip-db-update "${skip[@]}" "${ignore[@]}" .
+
+  hadolint:
+    name: Dockerfile lint (hadolint)
+    if: ${{ inputs.dockerfile != '' }}
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: hadolint (fail on error)
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          case "$DOCKERFILE" in *..*|/*|*[!A-Za-z0-9_./-]*) echo "::error::dockerfile path not allowed"; exit 1;; esac
+          docker run --rm -v "$PWD:/src:ro" -w /src "$HADOLINT_IMAGE" hadolint --failure-threshold error "$DOCKERFILE"
