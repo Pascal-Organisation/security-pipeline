@@ -5,7 +5,7 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> Status: **v0.3.1** – in allen 10 Repos der Org als PR (Branch `security-pipeline`)
+> Status: **v0.4.0** – in allen 10 Repos der Org als PR (Branch `security-pipeline`)
 > vorbereitet, gemergt und live bisher nur in `pascalhaag-website`. Wer was nutzt und
 > was fehlt: [Umsetzung in den Repos](#umsetzung-in-den-repos).
 
@@ -150,7 +150,7 @@ sie aktuell:
 ```yaml
 jobs:
   security:
-    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.3.1
+    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.4.0
     permissions:          # Obergrenze für die verschachtelten Jobs
       contents: read
       actions: read         # nur CodeQL (öffentlich) nutzt das
@@ -181,16 +181,16 @@ Stand 30.10.2026. „Branch“ heißt: Umstellung liegt als PR auf dem Branch
 
 | Repo | Sichtbarkeit | Typ | Nutzt | Pin | Stand |
 |---|---|---|---|---|---|
-| `pascalhaag-website` | privat | statisch, SSH | `ci`, `deploy-static`, `dast` | v0.3.0 | **gemergt, live** – Pin auf v0.3.1 heben (Nuclei-Fix) |
-| `websiteghana` | privat | statisch, FTPS + Staging | `ci`, `deploy-static`, `dast` | v0.3.1 | Branch |
-| `tickets` | privat | Container, Push-Deploy | `ci`, `build-container` (Key), `deploy-container` | v0.3.0 | Branch |
-| `solar` | öffentlich | Container, Pull-Deploy | `ci`, `build-container` (keyless) | v0.3.0 | Branch – Merge erst mit Umstellung des Hosts auf `app-deploy` |
-| `bahnbot` | privat | Container, Pull-Deploy | nur `ci` | v0.3.0 | Branch – **Abweichung**, siehe unten |
-| `homelab` | privat | nur CI | `ci` | v0.3.0 | Branch |
-| `knowledgebase` | privat | nur CI | `ci` | v0.3.0 | Branch |
-| `workingrepo` | privat | nur CI, inaktiv | `ci` | v0.3.0 | Branch |
-| `anmeldungunihandball` | öffentlich | nur CI | `ci` | v0.3.0 | Branch |
-| `Poose3` | öffentlich | nur CI, nicht gepflegt | `ci` | v0.3.0 | Branch – Trivy rot (alte Abhängigkeiten) |
+| `pascalhaag-website` | privat | statisch, SSH | `ci`, `deploy-static`, `dast` | v0.3.0 → v0.4.0 (PR) | **gemergt, live** |
+| `websiteghana` | privat | statisch, FTPS + Staging | `ci`, `deploy-static`, `dast` | v0.4.0 | Branch |
+| `tickets` | privat | Container, Push-Deploy | `ci`, `build-container` (Key), `deploy-container` | v0.4.0 | Branch |
+| `solar` | öffentlich | Container, Pull-Deploy | `ci`, `build-container` (keyless) | v0.4.0 | Branch – Merge erst mit Umstellung des Hosts auf `app-deploy` |
+| `bahnbot` | privat | Container, Pull-Deploy | nur `ci` | v0.4.0 | Branch – **Abweichung**, siehe unten |
+| `homelab` | privat | nur CI | `ci` | v0.4.0 | Branch |
+| `knowledgebase` | privat | nur CI | `ci` | v0.4.0 | Branch |
+| `workingrepo` | privat | nur CI, inaktiv | `ci` | v0.4.0 | Branch |
+| `anmeldungunihandball` | öffentlich | nur CI | `ci` | v0.4.0 | Branch |
+| `Poose3` | öffentlich | nur CI, nicht gepflegt | `ci` | v0.4.0 | Branch – Trivy rot (alte Abhängigkeiten) |
 
 Noch von keinem Repo genutzt: `image-rescan.yml`, `signing-runner`, das
 pre-commit-Template (nur `bahnbot` hat eine eigene `.pre-commit-config.yaml`).
