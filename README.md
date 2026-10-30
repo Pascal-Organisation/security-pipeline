@@ -5,9 +5,9 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> Status: **v0.3.0** – ausgerollt per PR in alle Repos der Org; Beispiele für jede
-> Kombination: `solar` (öffentlich, Container), `tickets` (privat, Container),
-> `pascalhaag-website` (privat, statisch). Gilt pro Repo erst, wenn dessen PR gemergt ist.
+> Status: **v0.3.1** – in allen 10 Repos der Org als PR (Branch `security-pipeline`)
+> vorbereitet, gemergt und live bisher nur in `pascalhaag-website`. Wer was nutzt und
+> was fehlt: [Umsetzung in den Repos](#umsetzung-in-den-repos).
 
 ---
 
@@ -130,6 +130,10 @@ Scannt `ghcr.io/<repo>:latest` mit frischen CVE-Daten (per `schedule:` aufrufen)
 die Zeit bis Dependency-Track: neue fixable HIGH/CRITICAL in bereits ausgerollten Images
 werden sichtbar.
 
+Bekannte Grenzen: Der Re-Scan checkt kein Repo aus, Ausnahmen aus `.trivyignore.yaml`
+gelten hier also nicht. Und er scannt `:latest`, nicht zwingend den Digest, der auf dem
+Host läuft (nach einem Rollback sind das zwei verschiedene Images). Noch ruft ihn kein Repo auf.
+
 ### Deploy-Status
 
 Jeder Deploy legt ein **GitHub Deployment** an (`in_progress` → `success`/`failure`,
@@ -146,7 +150,7 @@ sie aktuell:
 ```yaml
 jobs:
   security:
-    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.3.0
+    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.3.1
     permissions:          # Obergrenze für die verschachtelten Jobs
       contents: read
       actions: read         # nur CodeQL (öffentlich) nutzt das
@@ -167,7 +171,37 @@ Vollständige Beispiele:
 
 - öffentlich + Container: [`solar`](https://github.com/Pascal-Organisation/solar) – `.github/workflows/release.yml`
 - privat + Container: `tickets` – `.github/workflows/ci.yml`, `release.yml`
-- privat + statisch: `pascalhaag-website` – `.github/workflows/deploy.yml`
+- privat + statisch per SSH: `pascalhaag-website` – `.github/workflows/deploy.yml`
+- privat + statisch per FTPS mit Staging: `websiteghana` – `.github/workflows/release.yml`
+
+## Umsetzung in den Repos
+
+Stand 30.10.2026. „Branch“ heißt: Umstellung liegt als PR auf dem Branch
+`security-pipeline` und gilt erst nach dem Merge.
+
+| Repo | Sichtbarkeit | Typ | Nutzt | Pin | Stand |
+|---|---|---|---|---|---|
+| `pascalhaag-website` | privat | statisch, SSH | `ci`, `deploy-static`, `dast` | v0.3.0 | **gemergt, live** – Pin auf v0.3.1 heben (Nuclei-Fix) |
+| `websiteghana` | privat | statisch, FTPS + Staging | `ci`, `deploy-static`, `dast` | v0.3.1 | Branch |
+| `tickets` | privat | Container, Push-Deploy | `ci`, `build-container` (Key), `deploy-container` | v0.3.0 | Branch |
+| `solar` | öffentlich | Container, Pull-Deploy | `ci`, `build-container` (keyless) | v0.3.0 | Branch – Merge erst mit Umstellung des Hosts auf `app-deploy` |
+| `bahnbot` | privat | Container, Pull-Deploy | nur `ci` | v0.3.0 | Branch – **Abweichung**, siehe unten |
+| `homelab` | privat | nur CI | `ci` | v0.3.0 | Branch |
+| `knowledgebase` | privat | nur CI | `ci` | v0.3.0 | Branch |
+| `workingrepo` | privat | nur CI, inaktiv | `ci` | v0.3.0 | Branch |
+| `anmeldungunihandball` | öffentlich | nur CI | `ci` | v0.3.0 | Branch |
+| `Poose3` | öffentlich | nur CI, nicht gepflegt | `ci` | v0.3.0 | Branch – Trivy rot (alte Abhängigkeiten) |
+
+Noch von keinem Repo genutzt: `image-rescan.yml`, `signing-runner`, das
+pre-commit-Template (nur `bahnbot` hat eine eigene `.pre-commit-config.yaml`).
+
+**Abweichung `bahnbot`:** baut, signiert und deployt mit einer eigenen `release.yml` und
+einem eigenen Deployer statt `build-container.yml` und `app-deploy`. Unterschiede zum
+Standard: Signatur keyless, obwohl das Repo privat ist (Repo- und Workflow-Name landen im
+öffentlichen Rekor-Log), SBOM als SPDX statt CycloneDX, älteres Trivy, Trivy-Cache als
+Named Volume. Dafür hat es einen **Release-Policy-Job**, den die zentrale Pipeline noch
+nicht hat: Gebaut wird nur ein von GitHub verifizierter Commit, der selbst der Merge eines
+PRs nach `main` ist.
 
 ### Secrets (Org-Ebene, auf ausgewählte Repos beschränkt)
 
@@ -183,14 +217,16 @@ Der Public Key (`cosign.pub`) liegt auf jedem Host unter `/etc/app-deploy/cosign
 
 ## Runner
 
-| Runner-Gruppe | VM | darf | Netz |
+| Rolle | Labels in den Workflows | genutzt von | Netz |
 |---|---|---|---|
-| `ci` | VM 110 | alle **privaten** Repos | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
-| `deploy` | VM 111 | nur ausgewählte private Repos, nur Deploy-Jobs | nur zu den Zielhosts (+ GitHub) |
-| – | GitHub-hosted | alle **öffentlichen** Repos | – |
+| CI (VM 110) | `ci` | `homelab`, `knowledgebase`, `workingrepo`, `tickets` | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
+| CI, eigener Runner pro Repo | `pascalhaag-website`, `websiteghana`, `bahnbot` | das jeweilige Repo | wie `ci` |
+| Deploy (VM 111) | `pascalhaag-website-deploy`, `websiteghana-deploy`, `tickets-deploy` | nur Deploy-Jobs des jeweiligen Repos | nur zu den Zielhosts (+ GitHub) |
+| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos, DAST und Re-Scan auch für private | – |
 
 Regeln: Runner ephemeral, eigenes VLAN ohne Route ins Management-Netz, Self-hosted Runner
-nie für öffentliche Repos freigeben.
+nie für öffentliche Repos freigeben. Der Signier-Job von `tickets` läuft derzeit auf
+`ci`, also auf derselben VM wie Builds und Tests (siehe Grenzen).
 
 **Grenzen, offen benannt:**
 - `--ephemeral` erneuert nur den Runner-Prozess. Docker-Daemon, Images und Build-Cache
@@ -220,7 +256,9 @@ install -m 0644 cosign.pub /etc/app-deploy/cosign.pub                   # nur pr
   `restrict,from="<IP VM 111>",command="/usr/local/sbin/app-deploy <app>" ssh-ed25519 AAAA…`
 - **öffentlich (pull):** systemd-Timer ruft `/usr/local/sbin/app-deploy <app>` auf.
 - Voraussetzungen: `cosign` ≥ v3, Docker Compose v2, `flock`.
-- Kommandos über SSH: `deploy sha256:<digest>`, `status`, `rollback`.
+- Kommandos über SSH: `deploy sha256:<digest>`, `status`, `rollback`, `unhold`.
+- Pull-Apps (kein SSH-Zugang von außen) lokal auf dem Host:
+  `SSH_ORIGINAL_COMMAND=rollback /usr/local/sbin/app-deploy <app>` bzw. `…=unhold …`.
 
 ## Ausnahmen
 
@@ -242,8 +280,10 @@ git config --global commit.gpgsign true
 
 `renovate/default.json` ist das gemeinsame Preset: pinnt Actions und Images auf
 Digests, aktualisiert auch `image:tag@sha256` in `run:`-Zeilen und Skripten (was
-Dependabot nicht kann), regeneriert gehashte pip-compile-Locks (wöchentlich), wartet 3 Tage nach einem Release und merged kleine Updates selbst als PR,
-sobald alle Checks grün sind. Pro Repo:
+Dependabot nicht kann), regeneriert gehashte pip-compile-Locks (wöchentlich), wartet 3 Tage nach einem Release und
+merged kleine Updates selbst als PR, sobald alle Checks grün sind. Ausgenommen: Majors,
+die eigenen Workflows aus diesem Repo und Minor-/Major-Sprünge von Laufzeit-Images
+(python, php, node, …) – die kommen immer als PR zur Durchsicht. Pro Repo:
 
 ```json
 { "extends": ["local>Pascal-Organisation/security-pipeline//renovate/default"] }
