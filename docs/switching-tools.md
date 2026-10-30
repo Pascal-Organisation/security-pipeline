@@ -21,11 +21,12 @@ voraussetzen; es zählt nur `security-gate`.
 
 Beispiel: Trivy durch etwas anderes ersetzen.
 
-1. **Testen:** Neuer Job in `ci.yml` mit `continue-on-error: true`, **nicht** in den `needs`
-   von `security-gate`. Release als Minor. Die Ringe rollen es aus, nichts blockiert.
+1. **Testen:** Neuer Job in `ci.yml`, der nur berichtet und immer grün endet, **nicht** in den
+   `needs` von `security-gate`. Kein `continue-on-error`: Der rote Check würde Renovates
+   Automerge aufhalten. Release als Minor. Die Ringe rollen es aus, nichts blockiert.
 2. **Vergleichen:** Ein bis zwei Releases lang Funde beider Tools ansehen,
    `tools/fleet-status.sh` zeigt den Stand.
-3. **Umschalten:** Neuen Job in `needs` aufnehmen, `continue-on-error` entfernen, alten Job
+3. **Umschalten:** Neuen Job in `needs` aufnehmen, Fund als Fehler werten, alten Job
    löschen. Ausnahmen im selben Commit auf den neuen Scanner übersetzen. Release als Minor,
    solange der Vertrag gleich bleibt.
 
@@ -83,6 +84,15 @@ Automerge ist nur vertretbar, solange `main` und die Tags hier per Ruleset gesch
 
 `kind` ist `vulnerability` (Standard), `misconfiguration`, `secret` oder `license`.
 `reason` und `expires` sind Pflicht; nach Ablauf blockiert der Fund wieder.
+
+## Laufende Tests
+
+| Job | Zweck | Status |
+|---|---|---|
+| `Shell lint (trial)` | shellcheck über alle `.sh`-Dateien | berichtet nur, Bestandsfunde zuerst ansehen |
+| `Runtime images (trial)` | Trivy über die in Compose-Dateien genannten Images | berichtet nur |
+
+Beide stehen in der Job-Summary. Ins Gate kommen sie erst, wenn die Funde abgearbeitet sind.
 
 ## Überblick und Betrieb
 

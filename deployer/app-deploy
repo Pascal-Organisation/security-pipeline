@@ -35,7 +35,7 @@
 set -euo pipefail
 umask 022
 
-APP_DEPLOY_VERSION="v1.0.0"
+APP_DEPLOY_VERSION="v1.1.0"
 [[ "${1:-}" == --version ]] && { echo "$APP_DEPLOY_VERSION"; exit 0; }
 
 APP="${1:-}"
