@@ -208,7 +208,7 @@ Dependabot nicht kann), wartet 3 Tage nach einem Release und merged kleine Updat
 sobald alle Checks grün sind. Pro Repo:
 
 ```json
-{ "extends": ["github>Pascal-Organisation/security-pipeline//renovate/default"] }
+{ "extends": ["local>Pascal-Organisation/security-pipeline//renovate/default"] }
 ```
 
 ## Roadmap

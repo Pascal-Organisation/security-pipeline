@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Shared Renovate preset for Pascal-Organisation. Use in a repo's renovate.json: { \"extends\": [\"github>Pascal-Organisation/security-pipeline//renovate/default\"] }",
+  "description": "Shared Renovate preset for Pascal-Organisation. Use in a repo's renovate.json: { \"extends\": [\"local>Pascal-Organisation/security-pipeline//renovate/default\"] }",
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigests",
@@ -11,25 +11,34 @@
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
   "prHourlyLimit": 4,
-  "pre-commit": {
-    "enabled": true
-  },
   "packageRules": [
     {
       "description": "Small, aged updates merge themselves once every required check is green. Branch automerge: works without branch protection (private repos on GitHub Free).",
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
       "automerge": true,
       "automergeType": "branch"
     },
     {
       "description": "Majors always get a human look.",
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "automerge": false,
-      "labels": ["major-update"]
+      "labels": [
+        "major-update"
+      ]
     },
     {
       "description": "Our own reusable workflows: reviewed by hand, no waiting period.",
-      "matchPackageNames": ["Pascal-Organisation/security-pipeline"],
+      "matchPackageNames": [
+        "Pascal-Organisation/security-pipeline"
+      ],
       "minimumReleaseAge": "0 days",
       "automerge": false
     }
@@ -52,18 +61,32 @@
     {
       "customType": "regex",
       "description": "zizmor pinned by version in workflow env.",
-      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
-      "matchStrings": ["ZIZMOR_VERSION: \"(?<currentValue>[^\"]+)\""],
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "ZIZMOR_VERSION: \"(?<currentValue>[^\"]+)\""
+      ],
       "depNameTemplate": "zizmor",
       "datasourceTemplate": "pypi"
     },
     {
       "customType": "regex",
       "description": "bandit pinned by version in workflow env.",
-      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
-      "matchStrings": ["BANDIT_VERSION: \"(?<currentValue>[^\"]+)\""],
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "BANDIT_VERSION: \"(?<currentValue>[^\"]+)\""
+      ],
       "depNameTemplate": "bandit",
       "datasourceTemplate": "pypi"
     }
-  ]
+  ],
+  "git-submodules": {
+    "enabled": true
+  },
+  "pre-commit": {
+    "enabled": true
+  }
 }
