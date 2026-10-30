@@ -98,7 +98,9 @@ jobs:
           # Rate-limited, no fuzzing/intrusive templates: misconfig, exposure, TLS, known CVEs.
           # -duc/-ut off: no engine or template update at scan time.
           rc=0
-          docker run --rm -v "$out:/out" -v "$tpl:/templates:ro" "$NUCLEI_IMAGE" \
+          # As the runner user: files in $out stay writable/removable by the job.
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$out:/out" -v "$tpl:/templates:ro" "$NUCLEI_IMAGE" \
             -u "$TARGET" -t /templates -tags misconfig,exposure,ssl,cve,tech \
             -exclude-tags intrusive,fuzz,dos -duc \
             -rl 20 -c 10 -nc -jsonl -o /out/nuclei.jsonl 2> "$out/nuclei.log" || rc=$?
@@ -106,7 +108,7 @@ jobs:
           echo "Nuclei exit $rc, templates loaded: $loaded"
           [ "$rc" -eq 0 ] || { tail -20 "$out/nuclei.log"; echo "::error::Nuclei failed (exit $rc)"; exit 1; }
           [ "$loaded" -gt 0 ] || { tail -20 "$out/nuclei.log"; echo "::error::Nuclei loaded no templates — a scan without templates is not a pass"; exit 1; }
-          touch "$out/nuclei.jsonl"
+          [ -e "$out/nuclei.jsonl" ] || : > "$out/nuclei.jsonl"
           {
             echo "### Nuclei — $TARGET"
             jq -r '"- **\(.info.severity)** \(.info.name) — \(."matched-at")"' "$out/nuclei.jsonl"
