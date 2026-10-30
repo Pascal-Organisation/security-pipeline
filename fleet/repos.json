@@ -1,0 +1,83 @@
+{
+  "org": "Pascal-Organisation",
+  "repos": [
+    {
+      "name": "workingrepo",
+      "profile": "ci-only",
+      "ring": "canary",
+      "gate_check": "Security / security-gate"
+    },
+    {
+      "name": "anmeldungunihandball",
+      "profile": "ci-only",
+      "ring": "canary",
+      "gate_check": "Security / security-gate"
+    },
+    {
+      "name": "homelab",
+      "profile": "ci-only",
+      "ring": "stable",
+      "gate_check": "Security / security-gate"
+    },
+    {
+      "name": "knowledgebase",
+      "profile": "ci-only",
+      "ring": "stable",
+      "gate_check": "Security / security-gate"
+    },
+    {
+      "name": "Poose3",
+      "profile": "ci-only",
+      "ring": "stable",
+      "gate_check": "Security / security-gate",
+      "note": "Nicht gepflegt, Trivy rot (alte Abhängigkeiten): archivieren oder aktualisieren."
+    },
+    {
+      "name": "pascalhaag-website",
+      "profile": "static-ssh",
+      "ring": "stable",
+      "gate_check": "Security / security-gate",
+      "ct": 107
+    },
+    {
+      "name": "websiteghana",
+      "profile": "static-ftps",
+      "ring": "stable",
+      "gate_check": "Security / security-gate"
+    },
+    {
+      "name": "tickets",
+      "profile": "container-push",
+      "ring": "stable",
+      "gate_check": "Security / security-gate",
+      "note": "Vor dem Merge: Cosign-Secrets, tickets-deploy-Runner, Host nach deploy/README.md."
+    },
+    {
+      "name": "solar",
+      "profile": "container-pull",
+      "ring": "stable",
+      "gate_check": "Security / security-gate",
+      "ct": 132,
+      "deployer": "app-deploy",
+      "extra_required_checks": [
+        "Lint & test"
+      ]
+    },
+    {
+      "name": "bahnbot",
+      "profile": "container-pull",
+      "ring": "stable",
+      "gate_check": "Security / security-gate",
+      "ct": 112,
+      "deployer": "own",
+      "note": "Abweichung: eigene release.yml und eigener Deployer, Signatur keyless trotz privat (Repo- und Workflow-Name im öffentlichen Rekor-Log). Hat einen Release-Policy-Job, den build-container.yml noch nicht hat."
+    },
+    {
+      "name": "security-pipeline",
+      "profile": "ci-only",
+      "ring": "stable",
+      "gate_check": "ci / security-gate",
+      "note": "Das Pipeline-Repo selbst; ruft ci.yml lokal auf, kein Pin."
+    }
+  ]
+}

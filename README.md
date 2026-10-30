@@ -5,9 +5,9 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> Status: **v0.4.0** – in allen 10 Repos der Org als PR (Branch `security-pipeline`)
-> vorbereitet, gemergt und live bisher nur in `pascalhaag-website`. Wer was nutzt und
-> was fehlt: [Umsetzung in den Repos](#umsetzung-in-den-repos).
+> **v1.0.0.** Stabiler Vertrag für alle Repos, Tools lassen sich hier zentral tauschen:
+> [docs/switching-tools.md](docs/switching-tools.md). Wer was nutzt, zeigt immer aktuell
+> `tools/fleet-status.sh`.
 
 ---
 
@@ -130,7 +130,7 @@ Scannt `ghcr.io/<repo>:latest` mit frischen CVE-Daten (per `schedule:` aufrufen)
 die Zeit bis Dependency-Track: neue fixable HIGH/CRITICAL in bereits ausgerollten Images
 werden sichtbar.
 
-Bekannte Grenzen: Der Re-Scan checkt kein Repo aus, Ausnahmen aus `.trivyignore.yaml`
+Bekannte Grenzen: Der Re-Scan checkt kein Repo aus, Ausnahmen aus `.security/exceptions.json`
 gelten hier also nicht. Und er scannt `:latest`, nicht zwingend den Digest, der auf dem
 Host läuft (nach einem Rollback sind das zwei verschiedene Images). Noch ruft ihn kein Repo auf.
 
@@ -150,7 +150,7 @@ sie aktuell:
 ```yaml
 jobs:
   security:
-    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.4.0
+    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v1.0.0
     permissions:          # Obergrenze für die verschachtelten Jobs
       contents: read
       actions: read         # nur CodeQL (öffentlich) nutzt das
@@ -176,32 +176,17 @@ Vollständige Beispiele:
 
 ## Umsetzung in den Repos
 
-Stand 30.10.2026. „Branch“ heißt: Umstellung liegt als PR auf dem Branch
-`security-pipeline` und gilt erst nach dem Merge.
+`fleet/repos.json` hält fest, welches Repo welches Profil und welchen Rollout-Ring hat und
+wo es bewusst abweicht. Den tatsächlichen Stand liest `tools/fleet-status.sh` live von
+GitHub; eine Tabelle von Hand wäre nach Stunden veraltet.
 
-| Repo | Sichtbarkeit | Typ | Nutzt | Pin | Stand |
-|---|---|---|---|---|---|
-| `pascalhaag-website` | privat | statisch, SSH | `ci`, `deploy-static`, `dast` | v0.3.0 → v0.4.0 (PR) | **gemergt, live** |
-| `websiteghana` | privat | statisch, FTPS + Staging | `ci`, `deploy-static`, `dast` | v0.4.0 | Branch |
-| `tickets` | privat | Container, Push-Deploy | `ci`, `build-container` (Key), `deploy-container` | v0.4.0 | Branch |
-| `solar` | öffentlich | Container, Pull-Deploy | `ci`, `build-container` (keyless) | v0.4.0 | Branch – Merge erst mit Umstellung des Hosts auf `app-deploy` |
-| `bahnbot` | privat | Container, Pull-Deploy | nur `ci` | v0.4.0 | Branch – **Abweichung**, siehe unten |
-| `homelab` | privat | nur CI | `ci` | v0.4.0 | Branch |
-| `knowledgebase` | privat | nur CI | `ci` | v0.4.0 | Branch |
-| `workingrepo` | privat | nur CI, inaktiv | `ci` | v0.4.0 | Branch |
-| `anmeldungunihandball` | öffentlich | nur CI | `ci` | v0.4.0 | Branch |
-| `Poose3` | öffentlich | nur CI, nicht gepflegt | `ci` | v0.4.0 | Branch – Trivy rot (alte Abhängigkeiten) |
+### Der Vertrag
 
-Noch von keinem Repo genutzt: `image-rescan.yml`, `signing-runner`, das
-pre-commit-Template (nur `bahnbot` hat eine eigene `.pre-commit-config.yaml`).
-
-**Abweichung `bahnbot`:** baut, signiert und deployt mit einer eigenen `release.yml` und
-einem eigenen Deployer statt `build-container.yml` und `app-deploy`. Unterschiede zum
-Standard: Signatur keyless, obwohl das Repo privat ist (Repo- und Workflow-Name landen im
-öffentlichen Rekor-Log), SBOM als SPDX statt CycloneDX, älteres Trivy, Trivy-Cache als
-Named Volume. Dafür hat es einen **Release-Policy-Job**, den die zentrale Pipeline noch
-nicht hat: Gebaut wird nur ein von GitHub verifizierter Commit, der selbst der Merge eines
-PRs nach `main` ist.
+Rulesets und Release-Workflows setzen nur einen Check voraus:
+**`Security / security-gate`** (der Aufrufer-Job heißt dafür `Security`). Die Jobs darunter
+heißen nach Fähigkeiten (`Secrets`, `SAST (private)`, `Dependencies & IaC` …), nicht nach
+Tools. Was zum Vertrag gehört und wie man ein Tool tauscht:
+[docs/switching-tools.md](docs/switching-tools.md).
 
 ### Secrets (Org-Ebene, auf ausgewählte Repos beschränkt)
 
@@ -249,6 +234,7 @@ getrennt; Self-hosted Runner nie für öffentliche Repos freigeben. Der Signier-
 ## Host-Setup (Container-Apps)
 
 ```bash
+# Erstinstallation; Updates danach mit tools/fleet-hosts.sh --upgrade <tag> (über ssh proxmox)
 install -m 0755 deployer/app-deploy /usr/local/sbin/app-deploy
 install -d -m 0755 /etc/app-deploy
 install -m 0644 deployer/app.conf.example /etc/app-deploy/<app>.conf   # anpassen
@@ -260,13 +246,15 @@ install -m 0644 cosign.pub /etc/app-deploy/cosign.pub                   # nur pr
 - **öffentlich (pull):** systemd-Timer ruft `/usr/local/sbin/app-deploy <app>` auf.
 - Voraussetzungen: `cosign` ≥ v3, Docker Compose v2, `flock`.
 - Kommandos über SSH: `deploy sha256:<digest>`, `status`, `rollback`, `unhold`.
+- `app-deploy --version` zeigt die installierte Version, `tools/fleet-hosts.sh` alle Hosts.
 - Pull-Apps (kein SSH-Zugang von außen) lokal auf dem Host:
   `SSH_ORIGINAL_COMMAND=rollback /usr/local/sbin/app-deploy <app>` bzw. `…=unhold …`.
 
 ## Ausnahmen
 
-Akzeptierte Findings gehören in `.trivyignore.yaml` im jeweiligen Repo – immer mit
-Begründung und `expired_at`. Eine Ausnahme ohne Ablaufdatum wird nie wieder angesehen.
+Akzeptierte Findings gehören in `.security/exceptions.json` im jeweiligen Repo – immer mit
+Begründung und Ablaufdatum. Das Format hängt an keinem Scanner, siehe
+[docs/switching-tools.md](docs/switching-tools.md#ausnahmen).
 
 ## Lokal: pre-commit & signierte Commits
 
@@ -284,9 +272,10 @@ git config --global commit.gpgsign true
 `renovate/default.json` ist das gemeinsame Preset: pinnt Actions und Images auf
 Digests, aktualisiert auch `image:tag@sha256` in `run:`-Zeilen und Skripten (was
 Dependabot nicht kann), regeneriert gehashte pip-compile-Locks (wöchentlich), wartet 3 Tage nach einem Release und
-merged kleine Updates selbst als PR, sobald alle Checks grün sind. Ausgenommen: Majors,
-die eigenen Workflows aus diesem Repo und Minor-/Major-Sprünge von Laufzeit-Images
-(python, php, node, …) – die kommen immer als PR zur Durchsicht. Pro Repo:
+merged kleine Updates selbst als PR, sobald alle Checks grün sind. Ausgenommen: Majors und
+Minor-/Major-Sprünge von Laufzeit-Images (python, php, node, …) – die kommen immer als PR zur
+Durchsicht. Die eigenen Workflows laufen in Ringen: `workingrepo` und
+`anmeldungunihandball` sofort, alle anderen nach 3 Tagen, Majors immer von Hand. Pro Repo:
 
 ```json
 { "extends": ["local>Pascal-Organisation/security-pipeline//renovate/default"] }

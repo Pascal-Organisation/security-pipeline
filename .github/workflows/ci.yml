@@ -9,6 +9,10 @@
 ##   public  -> ubuntu-24.04, CodeQL
 ##   private -> inputs.private-runner (self-hosted CI runner), Semgrep (+ Bandit for Python)
 ##
+## Stable contract: callers depend on the inputs below and on the single check
+## "security-gate". Jobs are named after capabilities, never tools, so replacing a tool
+## changes only this file (docs/switching-tools.md).
+##
 ## Gates (fail the job): workflow lint (actionlint + zizmor >= medium), verified/unknown
 ## secrets (TruffleHog), SAST errors, fixable HIGH/CRITICAL vulnerabilities and
 ## HIGH/CRITICAL misconfigurations (Trivy), hadolint errors.
@@ -22,20 +26,20 @@ on:
         description: 'runs-on for PRIVATE repos, as JSON, e.g. ["self-hosted","ci"]. Ignored for public repos.'
         type: string
         default: '["self-hosted","ci"]'
-      codeql-languages:
-        description: "Public repos only: CodeQL languages, comma-separated (e.g. python,actions). Empty skips CodeQL."
+      sast-languages:
+        description: "Public repos: languages for SAST, comma-separated (e.g. python,actions). Empty skips SAST there."
         type: string
         default: "actions"
       python-paths:
-        description: "Space-separated paths for Bandit (private Python repos). Empty skips Bandit."
+        description: "Space-separated Python paths for the extra Python SAST (private repos). Empty skips it."
         type: string
         default: ""
       dockerfile:
-        description: "Path to the Dockerfile for hadolint. Empty skips hadolint."
+        description: "Path to the Dockerfile to lint. Empty skips the lint."
         type: string
         default: ""
-      trivy-skip-dirs:
-        description: "Comma-separated directories Trivy should skip (e.g. src/themes)."
+      scan-skip-dirs:
+        description: "Comma-separated directories the dependency/IaC scan should skip (e.g. src/themes)."
         type: string
         default: ""
 
@@ -54,7 +58,7 @@ env:
 
 jobs:
   workflow-lint:
-    name: Workflow lint (actionlint + zizmor)
+    name: Workflow lint
     runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
@@ -78,7 +82,7 @@ jobs:
           ' "$ZIZMOR_VERSION"
 
   secrets:
-    name: Secret scan (TruffleHog)
+    name: Secrets
     runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
@@ -113,9 +117,9 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" -w /repo "$TRUFFLEHOG_IMAGE" \
             git file:///repo --results=verified,unknown --fail --no-update --github-actions "${range[@]}"
 
-  codeql:
-    name: SAST (CodeQL)
-    if: ${{ !github.event.repository.private && inputs.codeql-languages != '' }}
+  sast-public:
+    name: SAST (public)
+    if: ${{ !github.event.repository.private && inputs.sast-languages != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -129,7 +133,7 @@ jobs:
 
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          languages: ${{ inputs.codeql-languages }}
+          languages: ${{ inputs.sast-languages }}
           build-mode: none
           queries: security-extended
 
@@ -137,8 +141,8 @@ jobs:
         with:
           category: codeql
 
-  semgrep:
-    name: SAST (Semgrep)
+  sast-private:
+    name: SAST (private)
     if: ${{ github.event.repository.private }}
     runs-on: ${{ fromJSON(inputs.private-runner) }}
     timeout-minutes: 20
@@ -174,8 +178,8 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  bandit:
-    name: SAST (Bandit)
+  sast-python:
+    name: SAST (Python)
     if: ${{ github.event.repository.private && inputs.python-paths != '' }}
     runs-on: ${{ fromJSON(inputs.private-runner) }}
     timeout-minutes: 10
@@ -200,8 +204,8 @@ jobs:
               /tmp/v/bin/bandit -q -r $PATHS --severity-level high --confidence-level medium
             ' "$BANDIT_VERSION"
 
-  trivy:
-    name: Dependencies, IaC & licences (Trivy)
+  dependencies:
+    name: Dependencies & IaC
     runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
@@ -211,20 +215,36 @@ jobs:
         with:
           persist-credentials: false
 
-      # Accepted findings go into the repo's .trivyignore.yaml, each with a reason and
-      # an expired_at date — an exception that is never revisited stops being one.
+      # Accepted findings go into the repo's .security/exceptions.json, each with a reason
+      # and an expiry date — an exception that is never revisited stops being one.
       - name: Trivy fs (gate + report)
         env:
-          SKIP_DIRS: ${{ inputs.trivy-skip-dirs }}
+          SKIP_DIRS: ${{ inputs.scan-skip-dirs }}
         run: |
-          case "$SKIP_DIRS" in *[!A-Za-z0-9_./,-]*) echo "::error::trivy-skip-dirs has unexpected characters"; exit 1;; esac
+          case "$SKIP_DIRS" in *[!A-Za-z0-9_./,-]*) echo "::error::scan-skip-dirs has unexpected characters"; exit 1;; esac
           skip=() ; [ -n "$SKIP_DIRS" ] && skip=(--skip-dirs "$SKIP_DIRS")
-          ignore=() ; [ -f .trivyignore.yaml ] && ignore=(--ignorefile .trivyignore.yaml)
+          # Tool-neutral exceptions (.security/exceptions.json, see docs/switching-tools.md),
+          # translated here so that replacing the scanner never touches a repo.
+          ignore=() ; mounts=()
+          if [ -f .security/exceptions.json ]; then
+            jq -e 'all(.exceptions[];
+                (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
+                and (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+                and ((.kind // "vulnerability") | IN("vulnerability", "misconfiguration", "secret", "license")))' \
+              .security/exceptions.json > /dev/null \
+              || { echo "::error::.security/exceptions.json: every entry needs id, reason, expires (YYYY-MM-DD) and a known kind"; exit 1; }
+            jq -r '.exceptions | group_by(.kind // "vulnerability")[] |
+                (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
+                (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
+              .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
+            ignore=(--ignorefile /scanner-ignore.yaml)
+            mounts=(-v "$RUNNER_TEMP/scanner-ignore.yaml:/scanner-ignore.yaml:ro")
+          fi
           # Cache per run: a named volume on a shared Docker daemon would outlive the job
           # and could be poisoned by another repo's job.
           mkdir -p "$RUNNER_TEMP/trivy-cache"
           trivy() { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
-            -v "$PWD:/src:ro" -w /src -v "$RUNNER_TEMP/trivy-cache:/cache" "$TRIVY_IMAGE" "$@"; }
+            -v "$PWD:/src:ro" -w /src -v "$RUNNER_TEMP/trivy-cache:/cache" "${mounts[@]}" "$TRIVY_IMAGE" "$@"; }
 
           echo "::group::Full report (not gating)"
           trivy fs --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" .
@@ -233,8 +253,8 @@ jobs:
           trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 --skip-db-update "${skip[@]}" "${ignore[@]}" .
 
-  hadolint:
-    name: Dockerfile lint (hadolint)
+  dockerfile:
+    name: Dockerfile lint
     if: ${{ inputs.dockerfile != '' }}
     runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 5
@@ -251,3 +271,24 @@ jobs:
         run: |
           case "$DOCKERFILE" in *..*|/*|*[!A-Za-z0-9_./-]*) echo "::error::dockerfile path not allowed"; exit 1;; esac
           docker run --rm -v "$PWD:/src:ro" -w /src "$HADOLINT_IMAGE" hadolint --failure-threshold error "$DOCKERFILE"
+
+  # The one check rulesets and release workflows depend on. New or replaced tools join
+  # `needs` here; a tool under trial stays out of `needs` and uses continue-on-error.
+  security-gate:
+    name: security-gate
+    if: ${{ always() }}
+    needs: [workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile]
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every capability passed (skipped only where not applicable)
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+          jq -e '[to_entries[] | select(.value.result != "success"
+                    and (.value.result != "skipped"
+                         or (.key | IN("sast-public", "sast-private", "sast-python", "dockerfile") | not)))]
+                 | length == 0' <<< "$RESULTS" > /dev/null \
+            || { echo "::error::security gate failed"; exit 1; }

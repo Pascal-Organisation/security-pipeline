@@ -35,6 +35,9 @@
 set -euo pipefail
 umask 022
 
+APP_DEPLOY_VERSION="v1.0.0"
+[[ "${1:-}" == --version ]] && { echo "$APP_DEPLOY_VERSION"; exit 0; }
+
 APP="${1:-}"
 [[ "$APP" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || { echo "usage: app-deploy <app>" >&2; exit 2; }
 CONF="/etc/app-deploy/${APP}.conf"
@@ -50,6 +53,8 @@ source "$CONF"
 : "${DEPLOY_DIR:?DEPLOY_DIR not set in $CONF}"  # e.g. /srv/tickets
 : "${SERVICES:?SERVICES not set in $CONF}"      # space-separated compose services to health-wait for
 VERIFY_MODE="${VERIFY_MODE:-keyless}"            # keyless | key
+# Trust during a signing migration: a conf may list a second key (space-separated) and
+# widen SIGNER_REGEXP for the overlap, then narrow both again. See docs/switching-tools.md.
 COSIGN_PUBKEY="${COSIGN_PUBKEY:-/etc/app-deploy/cosign.pub}"
 IMAGE_VAR="${IMAGE_VAR:-APP_IMAGE}"              # variable name compose reads the image from
 BUILT_VAR="${BUILT_VAR:-APP_BUILT_AT}"
@@ -57,7 +62,7 @@ COMPOSE_FROM_IMAGE="${COMPOSE_FROM_IMAGE:-}"     # path inside the image, e.g. /
 BACKUP_HOOK="${BACKUP_HOOK:-}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 MAX_RESTARTS="${MAX_RESTARTS:-3}"
-SIGNER_REGEXP='^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/build-container\.yml@'
+SIGNER_REGEXP="${SIGNER_REGEXP:-^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/build-container\.yml@}"
 OIDC_ISSUER="https://token.actions.githubusercontent.com"
 
 IMAGE_ENV="${DEPLOY_DIR}/image.env"
@@ -93,12 +98,23 @@ read_current() {
 }
 
 verify() {
-  local ref="$1" mode=()
+  local ref="$1" key
+  if [[ "$VERIFY_MODE" == key ]]; then
+    for key in $COSIGN_PUBKEY; do
+      verify_with "$ref" "$key" && return 0
+    done
+    return 1
+  fi
+  verify_with "$ref" ""
+}
+
+verify_with() {
+  local ref="$1" key="$2" mode=()
   if [[ "$VERIFY_MODE" == keyless ]]; then
     mode=(--certificate-identity-regexp "$SIGNER_REGEXP" --certificate-oidc-issuer "$OIDC_ISSUER"
           --certificate-github-workflow-repository "$REPOSITORY" --certificate-github-workflow-ref refs/heads/main)
   elif [[ "$VERIFY_MODE" == key ]]; then
-    mode=(--key "$COSIGN_PUBKEY" --insecure-ignore-tlog=true)
+    mode=(--key "$key" --insecure-ignore-tlog=true)
   else
     die "VERIFY_MODE must be keyless or key"
   fi
@@ -180,7 +196,7 @@ case "$cmd" in
   "")                 ;;   # timer / pull mode
   "status")
       read_current; hold=""; [[ -f "$HOLD" ]] && hold=" [HOLD]"
-      echo "running: ${current:-<none>} (built ${cur_built:-?})${hold}"; exit 0 ;;
+      echo "app-deploy ${APP_DEPLOY_VERSION}, running: ${current:-<none>} (built ${cur_built:-?})${hold}"; exit 0 ;;
   "unhold")           rm -f "$HOLD"; log "hold released"; exit 0 ;;
   "rollback")         ;;
   deploy\ sha256:*)

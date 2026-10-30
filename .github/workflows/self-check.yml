@@ -6,6 +6,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   schedule:
     - cron: "23 4 * * 1"   # weekly full-history secret scan + fresh CVE data
   workflow_dispatch:
@@ -24,10 +25,10 @@ jobs:
       actions: read # CodeQL needs workflow run metadata
       security-events: write # upload CodeQL results
     with:
-      codeql-languages: actions
+      sast-languages: actions
 
   shellcheck:
-    name: shellcheck (deployer)
+    name: shellcheck (deployer, tools)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -36,4 +37,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: shellcheck --severity=warning deployer/app-deploy
+      - run: shellcheck --severity=warning deployer/app-deploy tools/*.sh
+
+  consistency:
+    name: Version & manifest consistency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Provenance and hosts report these strings, so they must never drift from the tag.
+      - name: VERSION, build-container.yml, app-deploy and the tag agree
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          v="$(cat VERSION)"
+          grep -qxF "  PIPELINE_VERSION: $v" .github/workflows/build-container.yml \
+            || { echo "::error::build-container.yml PIPELINE_VERSION differs from VERSION ($v)"; exit 1; }
+          grep -qxF "APP_DEPLOY_VERSION=\"$v\"" deployer/app-deploy \
+            || { echo "::error::app-deploy version differs from VERSION ($v)"; exit 1; }
+          if [ "$REF_TYPE" = tag ] && [ "$REF_NAME" != "$v" ]; then
+            echo "::error::tag $REF_NAME differs from VERSION ($v)"; exit 1
+          fi
+      - name: Fleet manifest is valid
+        run: |
+          jq -e 'all(.repos[]; .name and (.profile | IN("ci-only", "container-push", "container-pull", "static-ssh", "static-ftps"))
+                 and (.ring | IN("canary", "stable")) and .gate_check)' fleet/repos.json > /dev/null

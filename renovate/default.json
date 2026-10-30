@@ -35,12 +35,47 @@
       ]
     },
     {
-      "description": "Our own reusable workflows: reviewed by hand, no waiting period.",
+      "description": "Our own reusable workflows, rollout ring 'stable': all pins move together, 3 days after a non-breaking release, once the gate is green.",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
       ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "groupName": "security-pipeline",
+      "minimumReleaseAge": "3 days",
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Our own reusable workflows, rollout ring 'canary' (keep in sync with fleet/repos.json): one private and one public repo take a release at once and surface problems first.",
+      "matchPackageNames": [
+        "Pascal-Organisation/security-pipeline"
+      ],
+      "matchRepositories": [
+        "Pascal-Organisation/workingrepo",
+        "Pascal-Organisation/anmeldungunihandball"
+      ],
+      "minimumReleaseAge": "0 days"
+    },
+    {
+      "description": "A major release of our own workflows changes the caller contract: always by hand.",
+      "matchPackageNames": [
+        "Pascal-Organisation/security-pipeline"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "groupName": "security-pipeline",
       "minimumReleaseAge": "0 days",
-      "automerge": false
+      "automerge": false,
+      "labels": [
+        "major-update"
+      ]
     },
     {
       "description": "Language runtime base images (python, php, node, ...): moving the minor/major version changes the runtime, so it comes as a PR for review, never automerged. Digest refreshes of the same tag still automerge.",

@@ -35,10 +35,10 @@ on:
         type: string
         default: ""
     secrets:
-      cosign-private-key:
-        description: "Private repos: Cosign private key (PEM). Org secret COSIGN_PRIVATE_KEY."
+      signing-key:
+        description: "Private repos: private signing key (PEM). Org secret COSIGN_PRIVATE_KEY."
         required: false
-      cosign-password:
+      signing-password:
         required: false
     outputs:
       image:
@@ -49,8 +49,9 @@ on:
 permissions: {}
 
 env:
-  # Version of this pipeline; ends up in the provenance's builder.id.
-  PIPELINE_VERSION: v0.3.1
+  # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
+  # equal to the VERSION file and the release tag.
+  PIPELINE_VERSION: v1.0.0
   TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
   SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
 
@@ -104,14 +105,30 @@ jobs:
           docker save "$LOCAL" -o "$RUNNER_TEMP/image.tar"
 
       # Gate: fixable HIGH/CRITICAL vulnerabilities and any embedded secret.
-      # Report: everything else. Exceptions live in .trivyignore.yaml (with expired_at).
+      # Report: everything else. Exceptions live in .security/exceptions.json (see ci.yml).
       - name: Trivy image (gate + report)
         run: |
-          ignore=() ; [ -f .trivyignore.yaml ] && ignore=(--ignorefile /src/.trivyignore.yaml)
+          # Tool-neutral exceptions (.security/exceptions.json, see docs/switching-tools.md),
+          # translated here so that replacing the scanner never touches a repo.
+          ignore=() ; mounts=()
+          if [ -f .security/exceptions.json ]; then
+            jq -e 'all(.exceptions[];
+                (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
+                and (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+                and ((.kind // "vulnerability") | IN("vulnerability", "misconfiguration", "secret", "license")))' \
+              .security/exceptions.json > /dev/null \
+              || { echo "::error::.security/exceptions.json: every entry needs id, reason, expires (YYYY-MM-DD) and a known kind"; exit 1; }
+            jq -r '.exceptions | group_by(.kind // "vulnerability")[] |
+                (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
+                (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
+              .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
+            ignore=(--ignorefile /scanner-ignore.yaml)
+            mounts=(-v "$RUNNER_TEMP/scanner-ignore.yaml:/scanner-ignore.yaml:ro")
+          fi
           # Cache per run (see ci.yml), container as the runner user.
           mkdir -p "$RUNNER_TEMP/trivy-cache"
           trivy() { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
-            -v "$TAR:/img.tar:ro" -v "$PWD:/src:ro" -v "$RUNNER_TEMP/trivy-cache:/cache" "$TRIVY_IMAGE" "$@"; }
+            -v "$TAR:/img.tar:ro" -v "$RUNNER_TEMP/trivy-cache:/cache" "${mounts[@]}" "$TRIVY_IMAGE" "$@"; }
           echo "::group::Full report (not gating)"
           trivy image --input /img.tar --scanners vuln,secret --exit-code 0 "${ignore[@]}"
           echo "::endgroup::"
@@ -134,7 +151,12 @@ jobs:
           echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           for tag in latest "sha-${GITHUB_SHA}"; do
             docker tag "$LOCAL" "${IMAGE}:${tag}"
-            docker push --quiet "${IMAGE}:${tag}"
+            # GHCR occasionally answers "unknown blob" mid-push; the tar is unchanged, so retry.
+            for attempt in 1 2 3; do
+              docker push --quiet "${IMAGE}:${tag}" && break
+              [ "$attempt" -lt 3 ] || { echo "::error::push of ${tag} failed 3 times"; exit 1; }
+              sleep $(( attempt * 15 ))
+            done
           done
           digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${IMAGE}:latest" \
             | grep "^${IMAGE}@" | head -1 | cut -d@ -f2)"
@@ -246,11 +268,11 @@ jobs:
       - name: Sign, attest SBOM + provenance, verify
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COSIGN_PRIVATE_KEY: ${{ secrets.cosign-private-key }}
-          COSIGN_PASSWORD: ${{ secrets.cosign-password }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.signing-key }}
+          COSIGN_PASSWORD: ${{ secrets.signing-password }}
         run: |
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::signing only on refs/heads/main"; exit 1; }
-          [ -n "$COSIGN_PRIVATE_KEY" ] || { echo "::error::secret cosign-private-key is not set"; exit 1; }
+          [ -n "$COSIGN_PRIVATE_KEY" ] || { echo "::error::secret signing-key is not set"; exit 1; }
           [ "$(cat subject.txt)" = "$REF" ] || { echo "::error::attestation subject mismatch"; exit 1; }
           export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" && mkdir -p "$DOCKER_CONFIG"
           trap 'rm -f "$RUNNER_TEMP/cosign.pub"; docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
