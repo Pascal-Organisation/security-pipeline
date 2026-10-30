@@ -7,7 +7,7 @@ Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und g
 
 > **v1.0.0.** Stabiler Vertrag für alle Repos, Tools lassen sich hier zentral tauschen:
 > [docs/switching-tools.md](docs/switching-tools.md). Wer was nutzt, zeigt immer aktuell
-> `tools/fleet-status.sh`.
+> `tools/fleet-status.sh`. Neues Projekt anbinden: [docs/new-project.md](docs/new-project.md).
 
 ---
 

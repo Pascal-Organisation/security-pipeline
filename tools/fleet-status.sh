@@ -23,14 +23,15 @@ echo "| Repo | Profil | Ring | Pin auf main | Offene Rollout-PRs | Letzter Lauf 
 echo "|---|---|---|---|---|---|---|---|"
 jq -c '.repos[]' "$MANIFEST" | while read -r entry; do
   repo="$(jq -r .name <<<"$entry")"
-  pin="$(pins "$repo" main)"
+  # A repo without workflows on main answers 404: that is a state to show, not an error.
+  pin="$(pins "$repo" main || true)"
   [ "$repo" = security-pipeline ] && pin="(lokal)"
   [ -n "$pin" ] || pin="–"
   [ "$pin" = "$latest" ] && pin="**$pin**"
   prs="$(gh pr list -R "$ORG/$repo" --state open --search 'security-pipeline in:title,head' \
         --json number --jq 'map("#\(.number)") | join(" ")')"
   run="$(gh run list -R "$ORG/$repo" --branch main --limit 1 --json workflowName,conclusion,createdAt \
-        --jq '.[0] | if . == null then "–" else "\(.workflowName): \(.conclusion // "läuft") (\(.createdAt[:10]))" end')"
+        --jq '.[0] | if . == null then "–" else "\(.workflowName): \(if .conclusion == "" then "läuft" else .conclusion end) (\(.createdAt[:10]))" end')"
   check="$(jq -r .gate_check <<<"$entry")"
   # 403 on GitHub Free for private repos: nothing can be required there.
   required="$(gh api "repos/$ORG/$repo/rules/branches/main" 2>/dev/null \
