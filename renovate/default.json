@@ -13,7 +13,7 @@
   "prHourlyLimit": 4,
   "packageRules": [
     {
-      "description": "Small, aged updates merge themselves once every required check is green. Branch automerge: works without branch protection (private repos on GitHub Free).",
+      "description": "Small, aged updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR — which release gates such as bahnbot's policy job require.",
       "matchUpdateTypes": [
         "minor",
         "patch",
@@ -22,7 +22,7 @@
         "digest"
       ],
       "automerge": true,
-      "automergeType": "branch"
+      "automergeType": "pr"
     },
     {
       "description": "Majors always get a human look.",
@@ -88,5 +88,18 @@
   },
   "pre-commit": {
     "enabled": true
+  },
+  "platformAutomerge": false,
+  "pip-compile": {
+    "managerFilePatterns": [
+      "/(^|/)([a-z-]+-)?requirements\\.lock$/"
+    ]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on monday"
+    ],
+    "automerge": true
   }
 }

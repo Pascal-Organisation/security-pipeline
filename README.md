@@ -5,7 +5,7 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> Status: **v0.1.0** – erste Version, läuft in `solar` (öffentlich, Container),
+> Status: **v0.2.0** – läuft in `solar` (öffentlich, Container),
 > `tickets` (privat, Container) und `pascalhaag-website` (privat, statisch).
 
 ---
@@ -92,7 +92,7 @@ Pipeline signiert hat.
 ### `deploy-static.yml` – statische Seiten (privat)
 
 Prüft das Artefakt (nur Dateien/Ordner, keine Links, keine `..`, `index.html`
-vorhanden), protokolliert seinen SHA-256 und liefert es aus:
+`required-file` – Standard `index.html` – liegt im Wurzelverzeichnis), protokolliert seinen SHA-256 und liefert es aus:
 
 - `ssh`: `ssh deploy@host "deploy <sha>" < site.tgz` → Receive-Skript auf dem Ziel
   (z. B. `hugo-receive` auf CT 107: entpacken, atomar umschalten, 5 Releases behalten)
@@ -204,7 +204,7 @@ git config --global commit.gpgsign true
 
 `renovate/default.json` ist das gemeinsame Preset: pinnt Actions und Images auf
 Digests, aktualisiert auch `image:tag@sha256` in `run:`-Zeilen und Skripten (was
-Dependabot nicht kann), wartet 3 Tage nach einem Release und merged kleine Updates selbst,
+Dependabot nicht kann), regeneriert gehashte pip-compile-Locks (wöchentlich), wartet 3 Tage nach einem Release und merged kleine Updates selbst als PR,
 sobald alle Checks grün sind. Pro Repo:
 
 ```json

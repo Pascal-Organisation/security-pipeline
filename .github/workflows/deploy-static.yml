@@ -24,6 +24,10 @@ on:
       artifact-file:
         type: string
         default: site.tgz
+      required-file:
+        description: "File that must exist at the archive root (index.html, index.php, ...)."
+        type: string
+        default: index.html
       transport:
         description: "ssh | ftps"
         type: string
@@ -98,7 +102,10 @@ jobs:
           name: ${{ inputs.artifact-name }}
 
       - name: Inspect artifact
+        env:
+          REQUIRED: ${{ inputs.required-file }}
         run: |
+          [[ "$REQUIRED" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::bad required-file"; exit 1; }
           [ -s "$FILE" ] || { echo "::error::$FILE missing or empty"; exit 1; }
           # Only regular files and directories, no absolute paths, no '..', no links.
           if tar -tvzf "$FILE" | awk '{print substr($1,1,1)}' | grep -qv '^[-d]$'; then
@@ -107,7 +114,7 @@ jobs:
           if tar -tzf "$FILE" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
             echo "::error::archive contains absolute or parent paths"; exit 1
           fi
-          tar -tzf "$FILE" | grep -qE '(^|/)index\.html$' || { echo "::error::no index.html in archive"; exit 1; }
+          tar -tzf "$FILE" | grep -qxE "(\./)?${REQUIRED//./\\.}" || { echo "::error::no $REQUIRED at the archive root"; exit 1; }
           echo "SHA256=$(sha256sum "$FILE" | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - id: record
