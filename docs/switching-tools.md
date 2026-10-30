@@ -11,7 +11,7 @@ Nur das hier darf ein Repo voraussetzen. Eine Änderung daran ist ein **Major-Re
 |---|---|
 | Pflicht-Check | `Security / security-gate` (Aufrufer-Job heißt `Security`) |
 | `ci.yml`-Inputs | `private-runner`, `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` |
-| `build-container.yml` | Inputs `private-runner`, `context`, `dockerfile`, `target`, `signing-runner`; Secrets `signing-key`, `signing-password` |
+| `build-container.yml` | Inputs `private-runner`, `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs`; Workflow-Pfad = Signatur-Identität |
 | Ausnahmen | `.security/exceptions.json` |
 
 Jobnamen wie `SAST (private)` nennen Fähigkeiten, nicht Tools. Niemand sollte sie als Check
@@ -37,11 +37,10 @@ Major: Renovate merged das nicht selbst.
 
 Hier hängt zusätzlich der Host dran, deshalb mit Überlappung:
 
-1. In `/etc/app-deploy/<app>.conf` beide Vertrauensanker erlauben:
-   `SIGNER_REGEXP='^https://…/alt\.yml@|^https://…/neu\.yml@'` bzw.
-   `COSIGN_PUBKEY="/etc/app-deploy/cosign.pub /etc/app-deploy/cosign-neu.pub"`.
+1. In `/etc/app-deploy/<app>.conf` beide Identitäten erlauben:
+   `SIGNER_REGEXP='^https://…/alt\.yml@|^https://…/neu\.yml@'`.
 2. Pipeline umstellen, releasen, einen Deploy abwarten.
-3. Den alten Anker aus der `.conf` entfernen.
+3. Die alte Identität aus der `.conf` entfernen.
 
 `build-container.yml` nicht umbenennen oder verschieben, ohne Schritt 1: Der Standard-
 `SIGNER_REGEXP` nennt genau diesen Pfad.

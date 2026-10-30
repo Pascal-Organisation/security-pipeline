@@ -13,6 +13,10 @@
 ## The artifact's SHA-256 is recorded in the deployment payload and the job summary,
 ## so "what is live" can be checked against the build later.
 ## DAST runs in dast.yml — before this job against staging, or after it against live.
+##
+## Before anything ships, this workflow checks for itself that the commit is on main and
+## that the Actions app reported a green security-gate for it. A caller cannot skip that by
+## dropping a `needs`, and a release-* tag on an unmerged branch cannot ship.
 name: deploy-static (reusable)
 
 on:
@@ -81,6 +85,8 @@ jobs:
       group: deploy-${{ github.repository }}-${{ inputs.environment }}
       cancel-in-progress: false   # never cut a deploy off mid-upload
     permissions:
+      contents: read # is the commit on main?
+      checks: read # did security-gate pass for it?
       deployments: write # GitHub Deployment record + status
     env:
       ENVIRONMENT: ${{ inputs.environment }}
@@ -96,6 +102,20 @@ jobs:
           [[ "$ENVIRONMENT" =~ ^[a-z0-9-]{1,30}$ ]] || { echo "::error::bad environment name"; exit 1; }
           [[ "$FILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::bad artifact-file"; exit 1; }
           [[ -z "$APP_URL" || "$APP_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
+
+      - name: Commit is on main and passed the gate
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          api() { curl -fsSL --max-time 20 -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$1"; }
+          case "$(api "compare/main...$GITHUB_SHA" | jq -r '.status')" in
+            identical|behind) ;;
+            *) echo "::error::$GITHUB_SHA is not on main; refusing to deploy"; exit 1;;
+          esac
+          # 15368 is the GitHub Actions app: no other source can report this check.
+          api "commits/$GITHUB_SHA/check-runs?app_id=15368&check_name=Security%20%2F%20security-gate&filter=latest" \
+            | jq -e 'any(.check_runs[]; .conclusion == "success")' > /dev/null \
+            || { echo "::error::no green security-gate for $GITHUB_SHA; refusing to deploy"; exit 1; }
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

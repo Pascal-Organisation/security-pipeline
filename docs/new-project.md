@@ -7,11 +7,9 @@ Ein neues Repo braucht nur wenige Zeilen: Es ruft die Workflows hier auf und tr�
 
 | Das Projekt ist … | Profil | Workflows | Vorlage |
 |---|---|---|---|
-| nur Code oder Skripte, öffentlich oder privat | `ci-only` | `ci` | `homelab`, `anmeldungunihandball` |
-| Container, öffentlich | `container-pull` | `ci`, `build-container`; Host holt selbst | `solar` |
-| Container, privat | `container-push` | `ci`, `build-container`, `deploy-container` | `tickets` (noch nicht im Betrieb erprobt) |
-| statische Seite, privat, eigener Host | `static-ssh` | `ci`, `deploy-static`, `dast` | `pascalhaag-website` |
-| statische Seite oder PHP, privat, Shared Hosting | `static-ftps` | `ci`, `deploy-static`, `dast` | `websiteghana` |
+| nur Code oder Skripte | `ci-only` | `ci` | `homelab`, `anmeldungunihandball` |
+| läuft auf einem eigenen Host, auch als statische Seite | `container-pull` | `ci`, `build-container` | `solar`, `bahnbot` |
+| Shared Hosting ohne eigene Prüfung, privat | `static-ftps` | `ci`, `deploy-static`, `dast` | `websiteghana` |
 
 Sichtbarkeit legt die Pipeline selbst fest:
 
@@ -19,10 +17,7 @@ Sichtbarkeit legt die Pipeline selbst fest:
 |---|---|---|
 | Runner | GitHub-hosted, immer | self-hosted, Label `ci` |
 | SAST | CodeQL (`sast-languages`) | Semgrep, dazu Bandit bei `python-paths` |
-| Signatur | keyless | Org-Key, kein öffentlicher Eintrag |
-
-`deploy-static` und `deploy-container` laufen nur in privaten Repos, weil sie einen
-self-hosted Runner brauchen. Für eine **öffentliche statische Seite** gibt es noch kein Profil.
+| Signatur | keyless | keyless; der Repo-Name steht im öffentlichen Rekor-Log |
 
 ## 2. Repo anlegen
 
@@ -92,57 +87,40 @@ eine solche Datei bleibt sie blind, auch wenn das Gate grün ist.
 
 Am besten von der Vorlage aus der Tabelle kopieren.
 
-### Container, öffentlich (`container-pull`)
+### Container (`container-pull`)
 
-`release.yml` wie in `solar`: `ci`, dann `build-container`, Permissions `contents: read`,
-`packages: write`, `id-token: write`. Auf dem Host:
+`release.yml` wie in `solar`: bei Push auf `main` `build-container` aufrufen. Permissions: `contents:
+read`, `actions: read`, `security-events: write`, `pull-requests: read`, `packages: write`, `id-token:
+write`. Das Gate läuft darin, es muss nicht extra aufgerufen werden. Auf dem Host:
 
 ```bash
-tools/fleet-hosts.sh --upgrade <tag>   # erst Eintrag mit ct und deployer: app-deploy anlegen
+# Eintrag mit ct, app und deployer: app-deploy in fleet/repos.json anlegen, dann:
+tools/fleet-hosts.sh --upgrade <tag>
 # /etc/app-deploy/<app>.conf nach deployer/app.conf.example, gehört root
 # systemd-Timer ruft /usr/local/sbin/app-deploy <app> auf
 ```
 
-**Nach dem ersten Release das Paket öffentlich stellen**
-(`https://github.com/orgs/Pascal-Organisation/packages/container/<repo>/settings`). Neue
-Pakete sind privat, der Host zieht ohne Login und bekommt sonst `unauthorized`, während die
-Release-Pipeline grün bleibt.
+Compose und Konfiguration gehören ins Image (`BUNDLE_FROM_IMAGE`), Secrets bleiben auf dem Host.
+Der Host braucht Lesezugriff auf das Image: **öffentliche Repos** stellen das Paket nach dem ersten
+Release öffentlich (`https://github.com/orgs/Pascal-Organisation/packages/container/<repo>/settings`),
+**private Repos** nutzen den Lese-Login aus der README. Sonst meldet der Host `unauthorized`, während
+die Release-Pipeline grün bleibt.
 
-### Container, privat (`container-push`)
-
-- Secrets `COSIGN_PRIVATE_KEY` und `COSIGN_PASSWORD` freigeben; an `build-container` als
-  `signing-key` und `signing-password` übergeben.
-- Deploy-Runner auf VM 111 mit dem Label `<repo>-deploy` registrieren.
-- Auf dem Host `cosign.pub` ablegen und im `authorized_keys` den Key festnageln:
-  `restrict,from="<IP VM 111>",command="/usr/local/sbin/app-deploy <app>" ssh-ed25519 …`
-
-### Statische Seite (`static-ssh`, `static-ftps`)
+### Shared Hosting (`static-ftps`)
 
 - Eigener Build-Job lädt das Artefakt `site` mit der Datei `site.tgz` hoch.
-- CI-Runner: privat reicht das Org-Label `ci`; die bestehenden Seiten haben eigene Runner.
-- Deploy-Runner auf VM 111 mit dem Label `<repo>-deploy` registrieren.
-- `static-ssh`: Secrets `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, Receive-Skript auf dem Ziel.
-- `static-ftps`: Secrets `FTP_HOST`, `FTP_USER`, `FTP_PASS`; es wird nie gelöscht.
+- Secrets `FTP_HOST`, `FTP_USER`, `FTP_PASS`; es wird nie gelöscht.
 - `dast.yml` nach dem Deploy aufrufen (oder vorher gegen Staging), nur gegen eigene Seiten.
 
 ## Regel: Kein Deploy ohne grünes Gate
 
-Das gilt für **jedes** deployende Repo, auch privat. Der GitHub-Free-Plan kann in privaten
-Repos keinen Merge blockieren, ein Workflow kann aber den Deploy verweigern:
+Das gilt für jedes deployende Repo, auch privat. Der GitHub-Free-Plan kann in privaten Repos keinen
+Merge blockieren, die Pipeline aber das Release:
 
-```yaml
-deploy:
-  needs: [security, build] # bzw. build mit needs: ci
-  if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-```
-
-Ohne `if: always()`, sonst läuft der Job trotz rotem Gate. Eine Release per Tag prüft stattdessen
-den Check `Security / security-gate` für genau diesen Commit (`websiteghana`, Job `verify`).
-
-Grenze: Wer Schreibrechte hat, kann den Workflow selbst ändern und das `needs` entfernen. In
-privaten Repos ohne Schutz von `main` lässt sich das nicht ausschließen. Das Ziel muss deshalb
-selbst prüfen, wo es geht: `app-deploy` nimmt nur Images mit gültiger Signatur und Provenance.
-Statische Artefakte sind noch unsigniert (siehe Roadmap).
+- **`container-pull`:** Das Gate läuft in `build-container.yml`, und der Host akzeptiert nur dessen
+  Signatur. Ein Repo kann das nicht umgehen, auch nicht durch Ändern seines eigenen Workflows.
+- **`static-ftps`:** `deploy-static.yml` prüft vor dem Upload selbst Gate und `main`. Das Ziel prüft
+  nichts, deshalb hilft hier nur diese Prüfung. Wer den Workflow im Repo ändert, kommt daran vorbei.
 
 ## 5. In die Flotte eintragen
 
@@ -152,18 +130,17 @@ Statische Artefakte sind noch unsigniert (siehe Roadmap).
 { "name": "mein-projekt", "profile": "ci-only", "ring": "stable", "gate_check": "Security / security-gate" }
 ```
 
-Container zusätzlich mit `"ct": 132, "deployer": "app-deploy"`, Abweichungen vom Standard
-mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.json` vorbehalten.
+Container zusätzlich mit `"ct": 132, "app": "solar", "deployer": "app-deploy"`, Abweichungen vom
+Standard mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.json` vorbehalten.
 
 ## 6. Prüfen und scharf schalten
 
 1. PR im neuen Repo: `Security / security-gate` muss grün sein.
-2. Prüfen, dass der Deploy per `needs` am Gate hängt (siehe Regel oben).
+2. Ersten Release abwarten: Policy, Gate, Build und Signatur müssen grün sein.
 3. `tools/fleet-status.sh` zeigt das Repo mit aktuellem Pin.
 4. Öffentliches Repo: `tools/fleet-rulesets.sh`, Ausgabe lesen, dann `--apply`. Private Repos
    lassen sich im GitHub-Free-Plan nicht schützen; das Gate meldet dort nur.
-5. Container: Ersten Deploy auf dem Host ansehen (`SSH_ORIGINAL_COMMAND=status
-   /usr/local/sbin/app-deploy <app>`). Grün in GitHub heißt noch nicht, dass er angekommen ist.
+5. Container: `tools/fleet-hosts.sh`. Grün in GitHub heißt noch nicht, dass er angekommen ist.
 
 ## Stolperfallen
 
