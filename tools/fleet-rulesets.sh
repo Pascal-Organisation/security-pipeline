@@ -40,7 +40,7 @@ upsert() {
     echo "$repo: '$name' not possible (private repo on GitHub Free)"; return 0
   fi
   if ! $APPLY; then
-    echo "$repo: would ${id:+update}${id:-create} '$name': $(jq -c '[.rules[] | .parameters.required_status_checks[]?.context]' <<<"$body")"
+    echo "$repo: would $([ -n "$id" ] && echo update || echo create) '$name': $(jq -c '[.rules[] | .parameters.required_status_checks[]?.context]' <<<"$body")"
     return 0
   fi
   if [ -n "$id" ]; then
