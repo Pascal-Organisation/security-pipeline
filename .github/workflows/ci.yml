@@ -46,6 +46,7 @@ env:
   ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
   PYTHON_IMAGE: python:3.13-slim-trixie@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb
   SEMGREP_IMAGE: semgrep/semgrep:1.183.0@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0
+  TRUFFLEHOG_IMAGE: ghcr.io/trufflesecurity/trufflehog:3.99.7@sha256:0d003fc3abc4e1565eca8462b992001314de51451e96e3c44de80d116794d5d1
   TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
   HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
   ZIZMOR_VERSION: "1.31.1"
@@ -89,11 +90,28 @@ jobs:
           fetch-depth: 0
 
       # PR: the PR's commits. Push: the pushed commits. schedule/dispatch: full history.
-      # verified = key still works; unknown = could not be checked. Both block.
-      - name: TruffleHog
-        uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2 # v3.99.7
-        with:
-          extra_args: --results=verified,unknown
+      # verified = key still works; unknown = could not be checked (no egress to the
+      # provider from the runner, provider down, ...). Both block.
+      # Run as a digest-pinned image, not the trufflehog action: the action pulls
+      # `trufflehog:latest` unless told otherwise. --no-update: no self-update at runtime.
+      - name: TruffleHog (block on verified + unknown)
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          range=()
+          if [ "$EVENT" = pull_request ]; then
+            range=(--since-commit "$PR_BASE" --branch "$PR_HEAD")
+          elif [ "$EVENT" = push ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            range=(--since-commit "$PUSH_BEFORE" --branch "$PUSH_AFTER")
+          fi
+          for v in "${range[@]}"; do [[ "$v" =~ ^(--since-commit|--branch|[0-9a-f]{40})$ ]] || { echo "::error::unexpected ref '$v'"; exit 1; }; done
+          echo "scope: ${range[*]:-full history}"
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" -w /repo "$TRUFFLEHOG_IMAGE" \
+            git file:///repo --results=verified,unknown --fail --no-update --github-actions "${range[@]}"
 
   codeql:
     name: SAST (CodeQL)
@@ -202,7 +220,11 @@ jobs:
           case "$SKIP_DIRS" in *[!A-Za-z0-9_./,-]*) echo "::error::trivy-skip-dirs has unexpected characters"; exit 1;; esac
           skip=() ; [ -n "$SKIP_DIRS" ] && skip=(--skip-dirs "$SKIP_DIRS")
           ignore=() ; [ -f .trivyignore.yaml ] && ignore=(--ignorefile .trivyignore.yaml)
-          trivy() { docker run --rm -v "$PWD:/src:ro" -w /src -v trivy-cache:/root/.cache "$TRIVY_IMAGE" "$@"; }
+          # Cache per run: a named volume on a shared Docker daemon would outlive the job
+          # and could be poisoned by another repo's job.
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          trivy() { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
+            -v "$PWD:/src:ro" -w /src -v "$RUNNER_TEMP/trivy-cache:/cache" "$TRIVY_IMAGE" "$@"; }
 
           echo "::group::Full report (not gating)"
           trivy fs --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" .

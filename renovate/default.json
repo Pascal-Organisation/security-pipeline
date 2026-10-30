@@ -81,13 +81,30 @@
       ],
       "depNameTemplate": "bandit",
       "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "nuclei-templates release pinned in dast.yml (tag + commit).",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/dast\\.yml$/"
+      ],
+      "matchStrings": [
+        "NUCLEI_TEMPLATES_REF: \"(?<currentValue>v[0-9.]+)\"\\s+NUCLEI_TEMPLATES_SHA: (?<currentDigest>[a-f0-9]{40})"
+      ],
+      "depNameTemplate": "projectdiscovery/nuclei-templates",
+      "datasourceTemplate": "github-tags",
+      "autoReplaceStringTemplate": "NUCLEI_TEMPLATES_REF: \"{{newValue}}\"\n  NUCLEI_TEMPLATES_SHA: {{newDigest}}"
     }
   ],
   "git-submodules": {
     "enabled": true
   },
   "pre-commit": {
-    "enabled": true
+    "enabled": true,
+    "managerFilePatterns": [
+      "/(^|/)\\.pre-commit-config\\.ya?ml$/",
+      "/(^|/)templates/pre-commit-config\\.ya?ml$/"
+    ]
   },
   "platformAutomerge": false,
   "pip-compile": {

@@ -11,6 +11,10 @@
 ## Call it against staging BEFORE the production deploy where a staging target exists
 ## (websiteghana: /release-test), otherwise right after the deploy against live.
 ## Only point it at sites you own.
+##
+## Always runs on GitHub-hosted runners, also for private repos: the targets are public
+## URLs and nothing of the repo is checked out, so the self-hosted CI VM does not need
+## egress to arbitrary sites (its allowlist stays: GitHub, registries, package indexes).
 name: dast (reusable)
 
 on:
@@ -20,9 +24,9 @@ on:
         type: string
         required: true
       private-runner:
-        description: 'runs-on for PRIVATE repos, as JSON. Ignored for public repos.'
+        description: "Deprecated, ignored: DAST always runs on GitHub-hosted runners."
         type: string
-        default: '["self-hosted","ci"]'
+        default: ""
       zap-minutes:
         description: "ZAP spider duration in minutes."
         type: number
@@ -32,12 +36,15 @@ permissions: {}
 
 env:
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.16.1@sha256:7840969c7c9fead565bf9734b12f49f6886db90b1d35b1f74d79710bbd081dab
+  # Templates pinned to a release instead of "whatever is newest at scan time".
+  NUCLEI_TEMPLATES_REF: "v10.5.1"
+  NUCLEI_TEMPLATES_SHA: 79fb682760ab3d5b0e22afbb44709353cbebf023
   NUCLEI_IMAGE: projectdiscovery/nuclei:v3.11.1@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb
 
 jobs:
   zap:
     name: ZAP baseline
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions: {}
     env:
@@ -50,8 +57,12 @@ jobs:
           [[ "$MINUTES" =~ ^[0-9]{1,2}$ ]] || { echo "::error::bad zap-minutes"; exit 1; }
           out="$RUNNER_TEMP/zap" && mkdir -p "$out" && chmod 0777 "$out"   # container runs as uid zap
           # -I: warnings alone do not fail the scan; the gate below decides.
+          # Exit codes: 0 pass, 1 fail, 2 warn, 3+ the scan itself broke. -I turns
+          # warnings into 0; the risk gate below decides on findings.
+          rc=0
           docker run --rm -v "$out:/zap/wrk:rw" "$ZAP_IMAGE" \
-            zap-baseline.py -t "$TARGET" -m "$MINUTES" -I -J zap.json -r zap.html || true
+            zap-baseline.py -t "$TARGET" -m "$MINUTES" -I -J zap.json -r zap.html || rc=$?
+          [ "$rc" -le 2 ] || { echo "::error::ZAP scan failed to run (exit $rc)"; exit 1; }
           [ -s "$out/zap.json" ] || { echo "::error::ZAP produced no report"; exit 1; }
           {
             echo "### ZAP baseline — $TARGET"
@@ -71,7 +82,7 @@ jobs:
 
   nuclei:
     name: Nuclei
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions: {}
     env:
@@ -81,11 +92,20 @@ jobs:
         run: |
           [[ "$TARGET" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
           out="$RUNNER_TEMP/nuclei" && mkdir -p "$out"
+          tpl="$RUNNER_TEMP/nuclei-templates"
+          git clone --quiet --depth 1 --branch "$NUCLEI_TEMPLATES_REF" https://github.com/projectdiscovery/nuclei-templates "$tpl"
+          [ "$(git -C "$tpl" rev-parse HEAD)" = "$NUCLEI_TEMPLATES_SHA" ] || { echo "::error::nuclei-templates tag moved"; exit 1; }
           # Rate-limited, no fuzzing/intrusive templates: misconfig, exposure, TLS, known CVEs.
-          docker run --rm -v "$out:/out" "$NUCLEI_IMAGE" \
-            -u "$TARGET" -tags misconfig,exposure,ssl,cve,tech \
-            -exclude-tags intrusive,fuzz,dos \
-            -rl 20 -c 10 -silent -nc -jsonl -o /out/nuclei.jsonl || true
+          # -duc/-ut off: no engine or template update at scan time.
+          rc=0
+          docker run --rm -v "$out:/out" -v "$tpl:/templates:ro" "$NUCLEI_IMAGE" \
+            -u "$TARGET" -t /templates -tags misconfig,exposure,ssl,cve,tech \
+            -exclude-tags intrusive,fuzz,dos -duc \
+            -rl 20 -c 10 -nc -jsonl -o /out/nuclei.jsonl 2> "$out/nuclei.log" || rc=$?
+          loaded="$(grep -oE 'Templates loaded for current scan: [0-9]+' "$out/nuclei.log" | grep -oE '[0-9]+$' || echo 0)"
+          echo "Nuclei exit $rc, templates loaded: $loaded"
+          [ "$rc" -eq 0 ] || { tail -20 "$out/nuclei.log"; echo "::error::Nuclei failed (exit $rc)"; exit 1; }
+          [ "$loaded" -gt 0 ] || { tail -20 "$out/nuclei.log"; echo "::error::Nuclei loaded no templates — a scan without templates is not a pass"; exit 1; }
           touch "$out/nuclei.jsonl"
           {
             echo "### Nuclei — $TARGET"

@@ -5,8 +5,9 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> Status: **v0.2.0** – läuft in `solar` (öffentlich, Container),
-> `tickets` (privat, Container) und `pascalhaag-website` (privat, statisch).
+> Status: **v0.3.0** – ausgerollt per PR in alle Repos der Org; Beispiele für jede
+> Kombination: `solar` (öffentlich, Container), `tickets` (privat, Container),
+> `pascalhaag-website` (privat, statisch). Gilt pro Repo erst, wenn dessen PR gemergt ist.
 
 ---
 
@@ -67,10 +68,16 @@ auf dem Proxmox-Host nie erreichen.
 2. **Trivy image** – Gate: fixable HIGH/CRITICAL + eingebettete Secrets
 3. **Syft** – SBOM im **CycloneDX**-Format
 4. Push nach `ghcr.io/pascal-organisation/<repo>` – genau das gescannte Tar, kein Rebuild
-5. **SLSA-v1-Provenance** (Build L2)
+5. **SLSA-v1-Provenance** – ehrlich eingeordnet: Build **L1 + Signatur**. Das Prädikat
+   schreiben Steps im selben, nutzerkontrollierten Job; L2/L3 bräuchte Provenance von der
+   Build-Plattform selbst. `builder.id` enthält die Pipeline-Version.
 6. **Cosign**: Signatur + Attestations (SBOM, Provenance), danach Selbst-Verifikation
    - öffentlich: keyless, Identität = dieser Workflow, Repo, `refs/heads/main`
    - privat: Org-Key, `--tlog-upload=false`
+
+Der Build läuft **nur auf `main`** (Guard im Workflow); der Signier-Job prüft das noch
+einmal. Für private Repos kann er per `signing-runner` auf einen eigenen Runner, der nie
+Builds oder Tests ausführt.
 
 Signieren läuft in einem eigenen Job ohne Scanner; nur der öffentliche Signier-Job darf
 ein OIDC-Token erzeugen.
@@ -82,9 +89,16 @@ SSH an den Host. Dort ist der Key in `authorized_keys` auf `app-deploy <app>` un
 des Runners festgenagelt. **Der Host entscheidet selbst** (siehe `deployer/app-deploy`):
 
 1. Signatur gültig (keyless-Identität bzw. Org-Public-Key)
-2. SBOM- **und** Provenance-Attestation vorhanden → Image kam durch die Pipeline
+2. SBOM-Attestation vorhanden, Provenance-Prädikat nennt **dieses Repo, `refs/heads/main`
+   und den Commit aus dem Image-Label** – im Key-Modus bindet erst das die Signatur an
+   einen Branch
 3. Neuer gebaut als das laufende Image (kein Replay alter, signierter Versionen)
 4. optional Backup-Hook → Umschalten → Health-Wait → automatischer Rollback
+
+`rollback` läuft ebenfalls unter Lock mit Health-Wait und setzt einen **Hold**: Der Timer
+(Pull-Modus) rollt dann nicht von selbst wieder auf `:latest` vor, bis `unhold` oder ein
+expliziter `deploy` kommt. Die `.conf` muss root gehören und darf nicht group/world-writable
+sein.
 
 Ein kompromittierter Deploy-Runner kann also höchstens ein Image deployen, das die
 Pipeline signiert hat.
@@ -104,8 +118,17 @@ Prüft das Artefakt (nur Dateien/Ordner, keine Links, keine `..`, `index.html`
 - **Nuclei**: Templates für Fehlkonfigurationen, offene Dateien/Panels, TLS, bekannte CVEs
   (rate-limited, ohne intrusive/fuzz-Templates)
 
-Gate: ZAP High bzw. Nuclei high/critical. Mit Staging (z. B. websiteghana
+Gate: ZAP High bzw. Nuclei high/critical. Ein Scan, der nicht läuft (ZAP-Exit ≥ 3, Nuclei
+ohne geladene Templates), ist **kein** Pass. Templates sind auf ein Release gepinnt
+(Renovate hält es aktuell). DAST läuft immer auf GitHub-hosted Runnern – die Ziele sind
+öffentlich, und die CI-VM braucht so keinen Egress zu beliebigen Seiten. Mit Staging (z. B. websiteghana
 `/release-test`) **vor** dem Produktiv-Deploy, sonst direkt danach gegen live.
+
+### `image-rescan.yml` – wöchentlicher Re-Scan
+
+Scannt `ghcr.io/<repo>:latest` mit frischen CVE-Daten (per `schedule:` aufrufen). Überbrückt
+die Zeit bis Dependency-Track: neue fixable HIGH/CRITICAL in bereits ausgerollten Images
+werden sichtbar.
 
 ### Deploy-Status
 
@@ -123,7 +146,7 @@ sie aktuell:
 ```yaml
 jobs:
   security:
-    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.1.0
+    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.3.0
     permissions:          # Obergrenze für die verschachtelten Jobs
       contents: read
       actions: read         # nur CodeQL (öffentlich) nutzt das
@@ -166,8 +189,23 @@ Der Public Key (`cosign.pub`) liegt auf jedem Host unter `/etc/app-deploy/cosign
 | `deploy` | VM 111 | nur ausgewählte private Repos, nur Deploy-Jobs | nur zu den Zielhosts (+ GitHub) |
 | – | GitHub-hosted | alle **öffentlichen** Repos | – |
 
-Regeln: Runner ephemeral (`--ephemeral`, frische Umgebung pro Job), eigenes VLAN ohne
-Route ins Management-Netz, Self-hosted Runner nie für öffentliche Repos freigeben.
+Regeln: Runner ephemeral, eigenes VLAN ohne Route ins Management-Netz, Self-hosted Runner
+nie für öffentliche Repos freigeben.
+
+**Grenzen, offen benannt:**
+- `--ephemeral` erneuert nur den Runner-Prozess. Docker-Daemon, Images und Build-Cache
+  bleiben zwischen Jobs und Repos bestehen; Zugriff auf den Docker-Socket ist faktisch root
+  auf der VM. Gegenmaßnahmen hier: `docker build --pull`, Trivy-Cache pro Run, Scanner als
+  Runner-User. Sauber wird es erst mit einer VM pro Job (Proxmox-Template klonen).
+- Der Cosign-Key privater Repos ist ein GitHub-Secret und damit für jeden Workflow der
+  freigegebenen Repos lesbar. Der Branch-Guard und die Provenance-Prüfung auf dem Host
+  schließen „Feature-Branch signiert“, aber nicht „jemand mit Schreibrechten liest den Key
+  aus“. Ziel: eigener Signier-Runner mit lokalem Key statt Secret.
+- TruffleHog kann ohne Egress zu den Providern nichts verifizieren – Funde sind dann
+  `unknown` und blockieren (gewollt, aber laut).
+- zizmor und Bandit werden per pip **ohne Hashes** installiert (Version gepinnt). Das
+  digest-gepinnte zizmor-OCI-Image braucht x86-64-v2 – Proxmox-CPU-Typ der Runner-VMs auf
+  `x86-64-v2-AES` stellen, dann kann es umgestellt werden.
 
 ## Host-Setup (Container-Apps)
 
@@ -217,4 +255,10 @@ sobald alle Checks grün sind. Pro Repo:
   bereits deployten Versionen
 - **Harbor** statt GHCR: Registry-seitig unsignierte Images ablehnen
 - Org-Rulesets für öffentliche Repos (signierte Commits, required checks)
-- Signatur auch für statische Artefakte (`cosign sign-blob`, Prüfung im Receive-Skript)
+- **Statische Deploys absichern (vorgezogen):** Signatur fürs Artefakt (`cosign sign-blob`)
+  und Prüfung im Receive-Skript; bei FTPS verwaiste Dateien melden (bisher bleibt eine
+  versehentlich veröffentlichte Datei dauerhaft live, weil nie gelöscht wird)
+- **CodeQL als Gate** in öffentlichen Repos: Code-Scanning-Merge-Protection per Ruleset
+  (kostenlos für öffentliche Repos)
+- **Signierte Commits in privaten Repos prüfen:** CI-Check per `git verify-commit` gegen
+  eine `allowed_signers`-Datei (Rulesets kosten bei privaten Repos)

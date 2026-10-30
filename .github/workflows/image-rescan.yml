@@ -1,0 +1,46 @@
+## Weekly re-scan of the released image — reusable. Call it from a `schedule:` trigger.
+##
+## A release that was clean on build day picks up new CVEs every week. Until
+## Dependency-Track is running, this re-scans ghcr.io/<repo>:latest (the image the hosts
+## run or poll) with fresh vulnerability data and fails — so it shows up — when a fixable
+## HIGH/CRITICAL appears. It never touches the host; the fix is a rebuild via Renovate
+## or a manual release.
+name: image-rescan (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        default: latest
+
+permissions: {}
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+
+jobs:
+  rescan:
+    name: Re-scan released image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      packages: read # pull a private package
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Trivy (fixable HIGH/CRITICAL fail)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::bad tag"; exit 1; }
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" && mkdir -p "$DOCKER_CONFIG"
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          ref="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG}"
+          docker pull --quiet "$ref" > /dev/null
+          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$ref")"
+          echo "### Re-scan of \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          docker save "$ref" -o "$RUNNER_TEMP/image.tar"
+          docker run --rm -v "$RUNNER_TEMP/image.tar:/img.tar:ro" "$TRIVY_IMAGE" \
+            image --input /img.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1

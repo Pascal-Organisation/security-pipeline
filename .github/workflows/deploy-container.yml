@@ -71,7 +71,8 @@ jobs:
     steps:
       - name: Preconditions
         run: |
-          case "$GITHUB_REF" in refs/heads/main|refs/tags/release-*) ;; *) echo "::error::deploys only from main or release-* tags (got $GITHUB_REF)"; exit 1;; esac
+          # Same rule as build-container.yml: container releases come from main only.
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::container deploys only from main (got $GITHUB_REF)"; exit 1; }
           [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::malformed digest"; exit 1; }
           [[ "$ENVIRONMENT" =~ ^[a-z0-9-]{1,30}$ ]] || { echo "::error::bad environment name"; exit 1; }
           [[ -z "$APP_URL" || "$APP_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] || { echo "::error::bad url"; exit 1; }
@@ -82,7 +83,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+          api() { curl -fsSL --max-time 20 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
           body="$(jq -n --arg ref "$GITHUB_SHA" --arg env "$ENVIRONMENT" --arg digest "$DIGEST" \
             '{ref: $ref, environment: $env, auto_merge: false, required_contexts: [], production_environment: ($env == "production"),
               description: ("container " + $digest[0:19]), payload: {digest: $digest}}')"
@@ -113,7 +114,7 @@ jobs:
         if: ${{ inputs.url != '' }}
         run: |
           for _ in 1 2 3 4 5 6; do
-            code="$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL")" && [ "$code" = 200 ] && { echo "$APP_URL: 200"; exit 0; }
+            code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL")" && [ "$code" = 200 ] && { echo "$APP_URL: 200"; exit 0; }
             sleep 5
           done
           echo "::error::$APP_URL answered $code"; exit 1
@@ -128,7 +129,7 @@ jobs:
         run: |
           state=failure; [ "$RESULT" = success ] && state=success
           if [[ "$ID" =~ ^[0-9]+$ ]]; then
-            curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            curl -fsSL --max-time 20 -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
               "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$ID/statuses" \
               -d "$(jq -n --arg s "$state" --arg url "$APP_URL" --arg log "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
                     '{state: $s, log_url: $log} + (if $url != "" then {environment_url: $url} else {} end)')" > /dev/null \
@@ -143,6 +144,6 @@ jobs:
             echo "- commit: \`$GITHUB_SHA\`"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$NTFY_URL" ]; then
-            curl -fsS -H "Title: ${GITHUB_REPOSITORY#*/} -> $ENVIRONMENT: $state" -H "Tags: $([ "$state" = success ] && echo white_check_mark || echo rotating_light)" \
+            curl -fsS --max-time 10 -H "Title: ${GITHUB_REPOSITORY#*/} -> $ENVIRONMENT: $state" -H "Tags: $([ "$state" = success ] && echo white_check_mark || echo rotating_light)" \
               -d "${GITHUB_SHA:0:12} ${DIGEST:0:19}" "$NTFY_URL" > /dev/null || echo "::warning::ntfy failed"
           fi

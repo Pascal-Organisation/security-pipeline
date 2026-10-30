@@ -19,12 +19,19 @@
 # Gates, in order, before anything runs:
 #   1. signature    cosign verify — keyless: signed by security-pipeline's build-container.yml
 #                   for exactly this repository on refs/heads/main; key: org public key.
-#   2. pipeline     the image carries a CycloneDX SBOM attestation and SLSA provenance
-#                   (only build-container.yml produces both, after the Trivy gate passed)
+#   2. pipeline     the image carries a CycloneDX SBOM attestation and a SLSA provenance
+#                   attestation whose predicate names THIS repository and refs/heads/main
+#                   and the commit in the image label (build-container.yml writes both,
+#                   after the Trivy gate passed). In key mode this is what ties a
+#                   signature to a branch — the key alone does not.
 #   3. freshness    built strictly later than what runs (a signature says who built it,
 #                   not which build — this stops replaying an old, signed, vulnerable digest)
 # then: optional compose sync from the image, pre-deploy backup hook, switch, health wait,
 # automatic rollback of image and compose file.
+#
+# Hold: `rollback` leaves ${DEPLOY_DIR}/.hold behind. While it exists, the timer (pull
+# mode) does nothing, so it cannot roll forward again to the :latest you just rolled back
+# from. `unhold` removes it; an explicit `deploy sha256:…` (push mode) clears it too.
 set -euo pipefail
 umask 022
 
@@ -32,6 +39,9 @@ APP="${1:-}"
 [[ "$APP" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || { echo "usage: app-deploy <app>" >&2; exit 2; }
 CONF="/etc/app-deploy/${APP}.conf"
 [[ -f "$CONF" && "$(stat -c '%u' "$CONF")" == 0 ]] || { echo "missing or not root-owned: $CONF" >&2; exit 2; }
+# sourced as code: must not be writable by anyone but root
+(( (8#$(stat -c '%a' "$CONF") & 8#022) == 0 )) || { echo "$CONF is group/world-writable" >&2; exit 2; }
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 # shellcheck source=/dev/null
 source "$CONF"
 
@@ -94,7 +104,17 @@ verify() {
   fi
   cosign verify "${mode[@]}" "$ref" > /dev/null || return 1
   cosign verify-attestation --type cyclonedx "${mode[@]}" "$ref" > /dev/null || return 1
-  cosign verify-attestation --type slsaprovenance1 "${mode[@]}" "$ref" > /dev/null || return 1
+  local prov want_commit
+  prov="$(cosign verify-attestation --type slsaprovenance1 "${mode[@]}" "$ref" 2>/dev/null)" || return 1
+  want_commit="$(label "$ref" org.opencontainers.image.revision)"
+  # Every verified provenance statement must name this repo, main, and the image's commit.
+  jq -r '.payload' <<<"$prov" | base64 -d | jq -se \
+      --arg repo "https://github.com/${REPOSITORY}" --arg commit "$want_commit" '
+        length > 0 and all(.[];
+          .predicate.buildDefinition.externalParameters.workflow.repository == $repo
+          and .predicate.buildDefinition.externalParameters.workflow.ref == "refs/heads/main"
+          and ($commit != "" and .predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit == $commit))' \
+      > /dev/null || { log "provenance does not match ${REPOSITORY}@refs/heads/main (${want_commit:-no commit label})"; return 1; }
 }
 
 compose_synced=0
@@ -155,13 +175,14 @@ wait_healthy() {
 # ---- what was asked ---------------------------------------------------------
 cmd="${SSH_ORIGINAL_COMMAND:-}"
 want_digest=""
+HOLD="${DEPLOY_DIR}/.hold"
 case "$cmd" in
   "")                 ;;   # timer / pull mode
-  "status")           read_current; echo "running: ${current:-<none>} (built ${cur_built:-?})"; exit 0 ;;
-  "rollback")
-      [[ -f "${IMAGE_ENV}.prev" ]] || die "no previous release recorded"
-      cp "${IMAGE_ENV}.prev" "$IMAGE_ENV"; "${COMPOSE[@]}" up -d --remove-orphans
-      log "rolled back to $(sed -n "s/^${IMAGE_VAR}=//p" "$IMAGE_ENV")"; exit 0 ;;
+  "status")
+      read_current; hold=""; [[ -f "$HOLD" ]] && hold=" [HOLD]"
+      echo "running: ${current:-<none>} (built ${cur_built:-?})${hold}"; exit 0 ;;
+  "unhold")           rm -f "$HOLD"; log "hold released"; exit 0 ;;
+  "rollback")         ;;
   deploy\ sha256:*)
       want_digest="${cmd#deploy }"
       [[ "$want_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || die "malformed digest" ;;
@@ -171,6 +192,25 @@ esac
 exec 9>"${DEPLOY_DIR}/.deploy.lock"
 flock -w 120 9 || die "another deploy is still running"
 read_current
+
+if [[ "$cmd" == rollback ]]; then
+  [[ -f "${IMAGE_ENV}.prev" ]] || die "no previous release recorded"
+  prev="$(sed -n "s/^${IMAGE_VAR}=//p" "${IMAGE_ENV}.prev")"
+  log "rolling back from ${current:-<none>} to ${prev}"
+  cp "${IMAGE_ENV}.prev" "$IMAGE_ENV"
+  touch "$HOLD"
+  "${COMPOSE[@]}" up -d --remove-orphans || die "compose up failed during rollback"
+  current=""; cur_built=""   # nothing further to roll back to from here
+  wait_healthy
+  log "rolled back to ${prev}; timer on hold until 'unhold' or an explicit deploy"
+  exit 0
+fi
+
+if [[ -z "$want_digest" && -f "$HOLD" ]]; then
+  log "on hold (${HOLD}); not polling :latest"
+  exit 0
+fi
+[[ -n "$want_digest" ]] && rm -f "$HOLD"
 
 if [[ -n "$want_digest" ]]; then
   candidate="${IMAGE}@${want_digest}"
