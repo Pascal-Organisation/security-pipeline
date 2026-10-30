@@ -5,9 +5,10 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> **v1.0.0.** Stabiler Vertrag für alle Repos, Tools lassen sich hier zentral tauschen:
-> [docs/switching-tools.md](docs/switching-tools.md). Wer was nutzt, zeigt immer aktuell
-> `tools/fleet-status.sh`. Neues Projekt anbinden: [docs/new-project.md](docs/new-project.md).
+> **v2.0.0.** Ein Weg für Releases, ein Weg für Deploys. Tools lassen sich hier zentral tauschen:
+> [docs/switching-tools.md](docs/switching-tools.md). Neues Projekt anbinden:
+> [docs/new-project.md](docs/new-project.md). Stand: `tools/fleet-status.sh` (Repos),
+> `tools/fleet-hosts.sh` (was wirklich auf den Hosts läuft).
 
 ---
 
@@ -15,35 +16,33 @@ Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und g
 
 ```mermaid
 flowchart LR
-  dev[Commit<br/>pre-commit + signiert] --> pr[Pull Request]
-  pr --> ci{ci.yml<br/>Gates}
-  ci -->|grün, main| build[build-container.yml<br/>oder Site-Build]
-  build --> sign[Cosign: Signatur<br/>+ SBOM + SLSA-Provenance]
-  sign --> reg[(GHCR)]
-  reg --> dep[deploy-*.yml<br/>Deploy-Runner]
-  dep --> host[Host prüft selbst:<br/>Signatur, Attestations,<br/>Freshness, Health]
-  host --> dast[dast.yml<br/>ZAP + Nuclei]
+  dev[Commit<br/>signiert] --> pr[Pull Request]
+  pr --> ci{ci.yml<br/>security-gate}
+  ci -->|Merge nach main| rel[build-container.yml<br/>Policy + Gate + Build + Signatur]
+  rel --> reg[(GHCR)]
+  host[Host: app-deploy per Timer<br/>prüft Signatur, Attestations,<br/>Freshness, Health] -->|holt| reg
+  host --> status[Status-Datei<br/>tools/fleet-hosts.sh]
 ```
 
-Zwei Achsen bestimmen, was ein Repo bekommt:
+**Die Grundidee:** Der Host akzeptiert nur Images, die `build-container.yml` signiert hat. Dieser
+Workflow signiert erst, nachdem Release-Policy und Gate in ihm selbst gelaufen sind. Eine gültige
+Signatur beweist also, dass beides lief, auch ohne Schutz von `main`.
 
 | | **öffentlich** | **privat** |
 |---|---|---|
-| Runner | GitHub-hosted (erzwungen) | eigene Self-hosted Runner (Proxmox) |
+| Runner | GitHub-hosted (erzwungen) | eigener Runner, Label `ci`; Signieren GitHub-hosted |
 | SAST | CodeQL | Semgrep (+ Bandit für Python) |
-| Signatur | Cosign keyless (Sigstore, OIDC) | Cosign Key-Pair, **kein** Eintrag im öffentlichen Rekor-Log |
-| Schutz von `main` | Rulesets: `security-gate` ist Pflicht für den Merge | Merge nicht blockierbar (GitHub Free), aber **kein Deploy ohne grünes Gate**; Host prüft Signatur & Herkunft |
-| Deploy | Pull: Host-Timer holt `:latest`, prüft, startet | Push: Deploy-Runner bittet Host per SSH-Forced-Command |
+| Signatur | Cosign keyless | Cosign keyless (Repo- und Workflow-Name stehen im öffentlichen Rekor-Log, Code nicht) |
+| Merge | `security-gate` ist Pflicht (Ruleset) | nicht blockierbar (GitHub Free), aber **kein Release ohne Gate und gemergten PR** |
 
-| | **Container** | **Statisch** |
+| Profil | Für | Deploy |
 |---|---|---|
-| Build | `build-container.yml` | eigener Build-Job im Projekt (z. B. Hugo), Artefakt `site.tgz` |
-| Deploy | `deploy-container.yml` → `app-deploy` auf dem Host | `deploy-static.yml` (SSH-Receive oder FTPS) |
+| `ci-only` | Code ohne Deploy | – |
+| `container-pull` | alles auf eigenen Hosts, auch statische Seiten als nginx-Image | Host holt per `app-deploy` |
+| `static-ftps` | Shared Hosting ohne eigene Prüfung | `deploy-static.yml` prüft Gate und `main`, dann FTPS |
 
-**Die Sichtbarkeit wird nie aus einem Input gelesen**, sondern aus
-`github.event.repository.private`. Ein öffentliches Repo läuft dadurch *immer* auf
-GitHub-hosted Runnern – egal, was der Aufrufer übergibt. Fork-PRs können die Runner
-auf dem Proxmox-Host nie erreichen.
+Die Sichtbarkeit kommt nie aus einem Input: Der erste Job fragt die API, und ohne Antwort läuft
+nichts. Fork-PRs können die eigenen Runner so nie erreichen.
 
 ---
 
@@ -64,53 +63,26 @@ auf dem Proxmox-Host nie erreichen.
 
 ### `build-container.yml` – Release eines Images (nur `main`)
 
-1. `docker build` mit OCI-Labels (`created` ist Pflicht: Replay-Schutz auf dem Host)
-2. **Trivy image** – Gate: fixable HIGH/CRITICAL + eingebettete Secrets
-3. **Syft** – SBOM im **CycloneDX**-Format
-4. Push nach `ghcr.io/pascal-organisation/<repo>` – genau das gescannte Tar, kein Rebuild
-5. **SLSA-v1-Provenance** – ehrlich eingeordnet: Build **L1 + Signatur**. Das Prädikat
-   schreiben Steps im selben, nutzerkontrollierten Job; L2/L3 bräuchte Provenance von der
-   Build-Plattform selbst. `builder.id` enthält die Pipeline-Version.
-6. **Cosign**: Signatur + Attestations (SBOM, Provenance), danach Selbst-Verifikation
-   - öffentlich: keyless, Identität = dieser Workflow, Repo, `refs/heads/main`
-   - privat: Org-Key, `--tlog-upload=false`
+1. **Release-Policy:** Commit liegt auf `main`, ist verifiziert und das Merge-Ergebnis eines PRs
+2. **Gate:** dieselbe `ci.yml` wie im PR
+3. `docker build` mit OCI-Labels (`created` ist Pflicht: Replay-Schutz auf dem Host)
+4. **Trivy image** – Gate: fixable HIGH/CRITICAL + eingebettete Secrets
+5. **Syft** – SBOM im **CycloneDX**-Format
+6. Push nach `ghcr.io/pascal-organisation/<repo>` – genau das gescannte Tar, kein Rebuild
+7. **SLSA-v1-Provenance** – ehrlich eingeordnet: Build **L1 + Signatur**. L2/L3 bräuchte Provenance
+   von der Build-Plattform selbst.
+8. **Cosign keyless:** Signatur + Attestations auf einem GitHub-hosted Runner, ohne Repo-Code und
+   ohne Scanner
 
-Der Build läuft **nur auf `main`** (Guard im Workflow); der Signier-Job prüft das noch
-einmal. Für private Repos kann er per `signing-runner` auf einen eigenen Runner, der nie
-Builds oder Tests ausführt.
+Der Host prüft auf genau diese Workflow-Identität. Deshalb darf die Datei nicht ohne die
+Überlappung aus [docs/switching-tools.md](docs/switching-tools.md) umbenannt werden.
 
-Signieren läuft in einem eigenen Job ohne Scanner; nur der öffentliche Signier-Job darf
-ein OIDC-Token erzeugen.
+### `deploy-static.yml` – Shared Hosting (privat)
 
-### `deploy-container.yml` – Push-Deploy (privat)
-
-Der Deploy-Runner checkt keinen Code aus. Er schickt nur `deploy sha256:<digest>` per
-SSH an den Host. Dort ist der Key in `authorized_keys` auf `app-deploy <app>` und die IP
-des Runners festgenagelt. **Der Host entscheidet selbst** (siehe `deployer/app-deploy`):
-
-1. Signatur gültig (keyless-Identität bzw. Org-Public-Key)
-2. SBOM-Attestation vorhanden, Provenance-Prädikat nennt **dieses Repo, `refs/heads/main`
-   und den Commit aus dem Image-Label** – im Key-Modus bindet erst das die Signatur an
-   einen Branch
-3. Neuer gebaut als das laufende Image (kein Replay alter, signierter Versionen)
-4. optional Backup-Hook → Umschalten → Health-Wait → automatischer Rollback
-
-`rollback` läuft ebenfalls unter Lock mit Health-Wait und setzt einen **Hold**: Der Timer
-(Pull-Modus) rollt dann nicht von selbst wieder auf `:latest` vor, bis `unhold` oder ein
-expliziter `deploy` kommt. Die `.conf` muss root gehören und darf nicht group/world-writable
-sein.
-
-Ein kompromittierter Deploy-Runner kann also höchstens ein Image deployen, das die
-Pipeline signiert hat.
-
-### `deploy-static.yml` – statische Seiten (privat)
-
-Prüft das Artefakt (nur Dateien/Ordner, keine Links, keine `..`, `index.html`
-`required-file` – Standard `index.html` – liegt im Wurzelverzeichnis), protokolliert seinen SHA-256 und liefert es aus:
-
-- `ssh`: `ssh deploy@host "deploy <sha>" < site.tgz` → Receive-Skript auf dem Ziel
-  (z. B. `hugo-receive` auf CT 107: entpacken, atomar umschalten, 5 Releases behalten)
-- `ftps`: Datei für Datei per FTPS (Shared Hosting), **nie mit Löschen**
+Für Ziele, die selbst nichts prüfen können. Vor dem Upload prüft der Workflow selbst, dass der
+Commit auf `main` liegt und `Security / security-gate` grün ist, und untersucht das Artefakt (nur
+Dateien/Ordner, keine Links, keine `..`). Dann lädt er per FTPS hoch, **nie mit Löschen**. `ssh` als
+Transport bleibt nur, bis `pascalhaag-website` umgezogen ist.
 
 ### `dast.yml` – von außen gegen die laufende Seite
 
@@ -136,9 +108,9 @@ Host läuft (nach einem Rollback sind das zwei verschiedene Images). Noch ruft i
 
 ### Deploy-Status
 
-Jeder Deploy legt ein **GitHub Deployment** an (`in_progress` → `success`/`failure`,
-mit Digest bzw. Artefakt-Hash), schreibt eine Job-Summary und schickt optional eine
-**ntfy**-Push-Nachricht (Secret `NTFY_URL`).
+`app-deploy` schreibt nach jedem Lauf `/var/lib/app-deploy/<app>.json` (Version, laufender Digest,
+Ergebnis, Fehler). `tools/fleet-hosts.sh` vergleicht das mit dem neuesten Image. Grün in GitHub heißt
+nur: Das Release ist fertig. Ob es läuft, steht dort.
 
 ---
 
@@ -164,15 +136,10 @@ jobs:
 GitHub prüft die `permissions` des Aufrufers gegen **jeden** verschachtelten Job –
 auch gegen Jobs, die übersprungen werden (CodeQL, keyless Signing in privaten Repos).
 Der Aufrufer gibt deshalb eine Obergrenze an; jeder Job hier deklariert selbst nur das,
-was er braucht. Für `build-container.yml` heißt das: `contents: read`,
-`packages: write`, `id-token: write`.
+was er braucht. Für `build-container.yml` heißt das: `contents: read`, `actions: read`,
+`security-events: write`, `pull-requests: read`, `packages: write`, `id-token: write`.
 
-Vollständige Beispiele:
-
-- öffentlich + Container: [`solar`](https://github.com/Pascal-Organisation/solar) – `.github/workflows/release.yml`
-- privat + Container: `tickets` – `.github/workflows/ci.yml`, `release.yml`
-- privat + statisch per SSH: `pascalhaag-website` – `.github/workflows/deploy.yml`
-- privat + statisch per FTPS mit Staging: `websiteghana` – `.github/workflows/release.yml`
+Vollständige Beispiele: `solar` (öffentlich), `bahnbot` (privat), `websiteghana` (FTPS).
 
 ## Umsetzung in den Repos
 
@@ -188,15 +155,11 @@ heißen nach Fähigkeiten (`Secrets`, `SAST (private)`, `Dependencies & IaC` …
 Tools. Was zum Vertrag gehört und wie man ein Tool tauscht:
 [docs/switching-tools.md](docs/switching-tools.md).
 
-### Secrets (Org-Ebene, auf ausgewählte Repos beschränkt)
+### Secrets
 
-| Secret | Wofür |
-|---|---|
-| `COSIGN_PRIVATE_KEY`, `COSIGN_PASSWORD` | Signieren privater Images (`cosign generate-key-pair`) |
-| `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` | pro Repo: Key, der auf dem Ziel nur das Receive-/Deploy-Skript darf |
-| `NTFY_URL` | optional: Deploy-Benachrichtigung |
-
-Der Public Key (`cosign.pub`) liegt auf jedem Host unter `/etc/app-deploy/cosign.pub`.
+Repos mit `container-pull` brauchen keine: Der Host holt selbst. Nur `static-ftps` hält
+`FTP_HOST`, `FTP_USER`, `FTP_PASS`. Auf privaten Hosts liegt ein Lese-Login für GHCR in
+`/etc/app-deploy/docker/config.json` (root, 0600).
 
 ---
 
@@ -220,10 +183,6 @@ getrennt; Self-hosted Runner nie für öffentliche Repos freigeben. Der Signier-
   VM. Gegenmaßnahmen hier: `docker build --pull`, Trivy-Cache pro Run, Scanner als
   Runner-User, `persist-credentials: false`. Sauber wird es erst mit einer frischen VM pro
   Job (Proxmox-Template klonen).
-- Der Cosign-Key privater Repos ist ein GitHub-Secret und damit für jeden Workflow der
-  freigegebenen Repos lesbar. Der Branch-Guard und die Provenance-Prüfung auf dem Host
-  schließen „Feature-Branch signiert“, aber nicht „jemand mit Schreibrechten liest den Key
-  aus“. Ziel: eigener Signier-Runner mit lokalem Key statt Secret.
 - TruffleHog kann ohne Egress zu den Providern nichts verifizieren – Funde sind dann
   `unknown` und blockieren (gewollt, aber laut).
 - zizmor und Bandit werden per pip **ohne Hashes** installiert (Version gepinnt). Das
@@ -234,21 +193,17 @@ getrennt; Self-hosted Runner nie für öffentliche Repos freigeben. Der Signier-
 ## Host-Setup (Container-Apps)
 
 ```bash
-# Erstinstallation; Updates danach mit tools/fleet-hosts.sh --upgrade <tag> (über ssh proxmox)
-install -m 0755 deployer/app-deploy /usr/local/sbin/app-deploy
+install -m 0755 deployer/app-deploy /usr/local/sbin/app-deploy    # danach: tools/fleet-hosts.sh --upgrade <tag>
 install -d -m 0755 /etc/app-deploy
 install -m 0644 deployer/app.conf.example /etc/app-deploy/<app>.conf   # anpassen
-install -m 0644 cosign.pub /etc/app-deploy/cosign.pub                   # nur private Repos
+# privates Image: Lese-Login, nur für root
+install -d -m 0700 /etc/app-deploy/docker
+DOCKER_CONFIG=/etc/app-deploy/docker docker login ghcr.io -u <konto>
 ```
 
-- **privat (push):** `authorized_keys` des Users `deploy`:
-  `restrict,from="<IP VM 111>",command="/usr/local/sbin/app-deploy <app>" ssh-ed25519 AAAA…`
-- **öffentlich (pull):** systemd-Timer ruft `/usr/local/sbin/app-deploy <app>` auf.
-- Voraussetzungen: `cosign` ≥ v3, Docker Compose v2, `flock`.
-- Kommandos über SSH: `deploy sha256:<digest>`, `status`, `rollback`, `unhold`.
-- `app-deploy --version` zeigt die installierte Version, `tools/fleet-hosts.sh` alle Hosts.
-- Pull-Apps (kein SSH-Zugang von außen) lokal auf dem Host:
-  `SSH_ORIGINAL_COMMAND=rollback /usr/local/sbin/app-deploy <app>` bzw. `…=unhold …`.
+- systemd-Timer ruft `/usr/local/sbin/app-deploy <app>` auf.
+- Voraussetzungen: `cosign` ≥ v3, `jq`, Docker Compose v2, `flock`.
+- Lokal: `SSH_ORIGINAL_COMMAND=status|rollback|unhold /usr/local/sbin/app-deploy <app>`.
 
 ## Ausnahmen
 

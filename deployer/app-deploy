@@ -1,41 +1,36 @@
 #!/usr/bin/env bash
 #
-# app-deploy — generic container deployer for hosts in the homelab.
-# Generalised from solar's solar-deploy.sh. One script, one config per app:
+# app-deploy — generic container deployer for hosts in the homelab. One script, one config
+# per app: /etc/app-deploy/<app>.conf (root:root 0644, see app.conf.example)
 #
-#   /etc/app-deploy/<app>.conf     (root:root 0644, see app.conf.example)
-#
-# Two ways in, same gates:
-#
-#   push  (private repos)  The deploy runner connects over SSH. authorized_keys pins the
-#                          key to this script, the app and the runner's IP:
-#                            restrict,from="192.168.178.212",command="/usr/local/sbin/app-deploy tickets" ssh-ed25519 AAAA...
-#                          The runner can only *ask*: "deploy sha256:<digest>", "rollback", "status".
-#                          It never chooses the image repository — that is fixed in the config.
-#
-#   pull  (public repos)   A systemd timer runs `app-deploy <app>` with no command; the script
-#                          resolves :latest itself. No inbound access to the host at all.
+# A systemd timer runs `app-deploy <app>`; the script resolves :latest itself. The host pulls,
+# nothing connects in, and no repo holds a credential for it.
 #
 # Gates, in order, before anything runs:
-#   1. signature    cosign verify — keyless: signed by security-pipeline's build-container.yml
-#                   for exactly this repository on refs/heads/main; key: org public key.
+#   1. signature    cosign verify, keyless: signed by security-pipeline's build-container.yml
+#                   for exactly this repository on refs/heads/main. Only that workflow can
+#                   produce this identity, and it signs after its release policy and
+#                   security gate passed, so the signature proves both ran.
 #   2. pipeline     the image carries a CycloneDX SBOM attestation and a SLSA provenance
 #                   attestation whose predicate names THIS repository and refs/heads/main
-#                   and the commit in the image label (build-container.yml writes both,
-#                   after the Trivy gate passed). In key mode this is what ties a
-#                   signature to a branch — the key alone does not.
+#                   and the commit in the image label.
 #   3. freshness    built strictly later than what runs (a signature says who built it,
 #                   not which build — this stops replaying an old, signed, vulnerable digest)
-# then: optional compose sync from the image, pre-deploy backup hook, switch, health wait,
-# automatic rollback of image and compose file.
+# then: optional config sync from the image, pre-deploy backup hook, switch, health wait,
+# automatic rollback of image and config.
 #
-# Hold: `rollback` leaves ${DEPLOY_DIR}/.hold behind. While it exists, the timer (pull
-# mode) does nothing, so it cannot roll forward again to the :latest you just rolled back
-# from. `unhold` removes it; an explicit `deploy sha256:…` (push mode) clears it too.
+# Local commands, through SSH_ORIGINAL_COMMAND: status, rollback, unhold, deploy sha256:<digest>
+# Hold: `rollback` leaves ${DEPLOY_DIR}/.hold behind. While it exists, the timer does nothing,
+# so it cannot roll forward again to the :latest you just rolled back from. `unhold` removes it.
+#
+# Every run records its outcome in /var/lib/app-deploy/<app>.json. tools/fleet-hosts.sh reads
+# it, so "the release is green" and "the host runs it" can be told apart.
+#
+# Private images: a read-only registry login in /etc/app-deploy/docker/config.json (root, 0600).
 set -euo pipefail
 umask 022
 
-APP_DEPLOY_VERSION="v1.1.0"
+APP_DEPLOY_VERSION="v2.0.0"
 [[ "${1:-}" == --version ]] && { echo "$APP_DEPLOY_VERSION"; exit 0; }
 
 APP="${1:-}"
@@ -52,26 +47,42 @@ source "$CONF"
 : "${REPOSITORY:?REPOSITORY not set in $CONF}"  # e.g. Pascal-Organisation/tickets
 : "${DEPLOY_DIR:?DEPLOY_DIR not set in $CONF}"  # e.g. /srv/tickets
 : "${SERVICES:?SERVICES not set in $CONF}"      # space-separated compose services to health-wait for
-VERIFY_MODE="${VERIFY_MODE:-keyless}"            # keyless | key
-# Trust during a signing migration: a conf may list a second key (space-separated) and
-# widen SIGNER_REGEXP for the overlap, then narrow both again. See docs/switching-tools.md.
-COSIGN_PUBKEY="${COSIGN_PUBKEY:-/etc/app-deploy/cosign.pub}"
+# Trust during a signing migration: a conf may widen SIGNER_REGEXP for the overlap, then
+# narrow it again. See docs/switching-tools.md.
 IMAGE_VAR="${IMAGE_VAR:-APP_IMAGE}"              # variable name compose reads the image from
 BUILT_VAR="${BUILT_VAR:-APP_BUILT_AT}"
 COMPOSE_FROM_IMAGE="${COMPOSE_FROM_IMAGE:-}"     # path inside the image, e.g. /app/deploy/docker-compose.yml
+BUNDLE_FROM_IMAGE="${BUNDLE_FROM_IMAGE:-}"       # directory inside the image, copied over DEPLOY_DIR (compose + config)
 BACKUP_HOOK="${BACKUP_HOOK:-}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 MAX_RESTARTS="${MAX_RESTARTS:-3}"
 SIGNER_REGEXP="${SIGNER_REGEXP:-^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/build-container\.yml@}"
 OIDC_ISSUER="https://token.actions.githubusercontent.com"
 
+# Registry login for private images, readable by root only.
+[[ -f /etc/app-deploy/docker/config.json ]] && export DOCKER_CONFIG=/etc/app-deploy/docker
+
 IMAGE_ENV="${DEPLOY_DIR}/image.env"
 COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
 COMPOSE_PREV="${COMPOSE_FILE}.prev"
 COMPOSE=(docker compose --project-name "$APP" --project-directory "$DEPLOY_DIR" -f "$COMPOSE_FILE" --env-file "$IMAGE_ENV")
 
+# Every run leaves its outcome behind, also when it dies.
+STATUS_FILE="/var/lib/app-deploy/${APP}.json"
+last_error=""
+record_status() {
+  local rc=$?
+  mkdir -p "$(dirname "$STATUS_FILE")"
+  jq -n --arg app "$APP" --arg version "$APP_DEPLOY_VERSION" --arg error "$last_error" \
+    --arg running "$(sed -n "s/^${IMAGE_VAR}=//p" "$IMAGE_ENV" 2>/dev/null)" \
+    --arg built "$(sed -n "s/^${BUILT_VAR}=//p" "$IMAGE_ENV" 2>/dev/null)" \
+    --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson rc "$rc" \
+    '{app: $app, version: $version, running: $running, built: $built, checked: $checked, ok: ($rc == 0), error: $error}' \
+    > "${STATUS_FILE}.tmp" && mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+}
+
 log() { printf '%s app-deploy[%s]: %s\n' "$(date -Is)" "$APP" "$*"; }
-die() { log "ERROR: $*"; exit 1; }
+die() { last_error="$*"; log "ERROR: $*"; exit 1; }
 
 label() {
   local v=""
@@ -98,26 +109,8 @@ read_current() {
 }
 
 verify() {
-  local ref="$1" key
-  if [[ "$VERIFY_MODE" == key ]]; then
-    for key in $COSIGN_PUBKEY; do
-      verify_with "$ref" "$key" && return 0
-    done
-    return 1
-  fi
-  verify_with "$ref" ""
-}
-
-verify_with() {
-  local ref="$1" key="$2" mode=()
-  if [[ "$VERIFY_MODE" == keyless ]]; then
-    mode=(--certificate-identity-regexp "$SIGNER_REGEXP" --certificate-oidc-issuer "$OIDC_ISSUER"
-          --certificate-github-workflow-repository "$REPOSITORY" --certificate-github-workflow-ref refs/heads/main)
-  elif [[ "$VERIFY_MODE" == key ]]; then
-    mode=(--key "$key" --insecure-ignore-tlog=true)
-  else
-    die "VERIFY_MODE must be keyless or key"
-  fi
+  local ref="$1" mode=(--certificate-identity-regexp "$SIGNER_REGEXP" --certificate-oidc-issuer "$OIDC_ISSUER"
+    --certificate-github-workflow-repository "$REPOSITORY" --certificate-github-workflow-ref refs/heads/main)
   cosign verify "${mode[@]}" "$ref" > /dev/null || return 1
   cosign verify-attestation --type cyclonedx "${mode[@]}" "$ref" > /dev/null || return 1
   local prov want_commit
@@ -154,9 +147,34 @@ sync_compose() {
   fi
 }
 
+# Config that ships in the image, verified with it. Secrets and image.env never do.
+BUNDLE_PREV="${DEPLOY_DIR}/.bundle.prev"
+bundle_synced=0
+sync_bundle() {
+  [[ -n "$BUNDLE_FROM_IMAGE" ]] || return 0
+  local cid tmp f
+  tmp="$(mktemp -d "${DEPLOY_DIR}/.bundle.XXXXXX")"
+  cid="$(docker create "$candidate")" || { rm -rf "$tmp"; die "docker create failed"; }
+  if ! docker cp "${cid}:${BUNDLE_FROM_IMAGE}/." "$tmp" 2>/dev/null; then
+    docker rm "$cid" >/dev/null 2>&1 || true; rm -rf "$tmp"
+    die "image carries no ${BUNDLE_FROM_IMAGE}"
+  fi
+  docker rm "$cid" >/dev/null
+  if [[ -n "$(find "$tmp" ! -type f ! -type d)" ]]; then rm -rf "$tmp"; die "bundle contains links or special files"; fi
+  if [[ -e "$tmp/secrets" || -e "$tmp/image.env" ]]; then rm -rf "$tmp"; die "bundle must not contain secrets/ or image.env"; fi
+  rm -rf "$BUNDLE_PREV"; mkdir -p "$BUNDLE_PREV"
+  while IFS= read -r f; do
+    [[ -f "${DEPLOY_DIR}/${f}" ]] && install -D -m 0644 "${DEPLOY_DIR}/${f}" "${BUNDLE_PREV}/${f}"
+    install -D -m 0644 "${tmp}/${f}" "${DEPLOY_DIR}/${f}"
+  done < <(cd "$tmp" && find . -type f | sed 's#^\./##')
+  rm -rf "$tmp"; bundle_synced=1
+  log "config bundle updated from the verified image"
+}
+
 rollback() {
   log "$1; rolling back to ${current:-<none>}"
   if [[ "$compose_synced" == 1 && -f "$COMPOSE_PREV" ]]; then cp "$COMPOSE_PREV" "$COMPOSE_FILE"; fi
+  if [[ "$bundle_synced" == 1 && -d "$BUNDLE_PREV" ]]; then cp -a "${BUNDLE_PREV}/." "$DEPLOY_DIR/"; fi
   if [[ -n "$current" ]]; then
     write_image_env "$current" "$cur_built"
     "${COMPOSE[@]}" up -d --remove-orphans || log "WARNING: rollback 'compose up' failed too"
@@ -205,6 +223,7 @@ case "$cmd" in
   *)                  die "command not allowed: ${cmd:0:80}" ;;
 esac
 
+trap record_status EXIT
 exec 9>"${DEPLOY_DIR}/.deploy.lock"
 flock -w 120 9 || die "another deploy is still running"
 read_current
@@ -242,7 +261,7 @@ digest="${candidate#*@}"
 if [[ "$candidate" == "$current" ]]; then log "already running ${digest}"; exit 0; fi
 
 # Gate 1+2: authenticity and pipeline provenance, against the digest, before anything runs.
-log "verifying signature + attestations for ${digest} (${VERIFY_MODE}) ..."
+log "verifying signature + attestations for ${digest} ..."
 if ! verify "$candidate"; then
   docker rmi "$candidate" >/dev/null 2>&1 || true
   die "verification FAILED for ${candidate}; refusing to deploy"
@@ -261,6 +280,7 @@ fi
 
 log "verified; deploying ${digest} (commit $(label "$candidate" org.opencontainers.image.revision | cut -c1-12), built ${cand_built})"
 sync_compose
+sync_bundle
 
 if [[ -n "$current" && -n "$BACKUP_HOOK" && "${SKIP_BACKUP:-0}" != 1 ]]; then
   "$BACKUP_HOOK" || die "pre-deploy backup failed; refusing to deploy"

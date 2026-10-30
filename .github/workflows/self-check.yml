@@ -65,5 +65,5 @@ jobs:
           fi
       - name: Fleet manifest is valid
         run: |
-          jq -e 'all(.repos[]; .name and (.profile | IN("ci-only", "container-push", "container-pull", "static-ssh", "static-ftps"))
+          jq -e 'all(.repos[]; .name and (.profile | IN("ci-only", "container-pull", "static-ftps"))
                  and (.ring | IN("canary", "stable")) and .gate_check)' fleet/repos.json > /dev/null

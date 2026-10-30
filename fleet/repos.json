@@ -35,23 +35,18 @@
     },
     {
       "name": "pascalhaag-website",
-      "profile": "static-ssh",
+      "profile": "container-pull",
       "ring": "stable",
       "gate_check": "Security / security-gate",
-      "ct": 107
+      "ct": 107,
+      "deployer": "app-deploy",
+      "app": "hugo-site"
     },
     {
       "name": "websiteghana",
       "profile": "static-ftps",
       "ring": "stable",
       "gate_check": "Security / security-gate"
-    },
-    {
-      "name": "tickets",
-      "profile": "container-push",
-      "ring": "stable",
-      "gate_check": "Security / security-gate",
-      "note": "Vor dem Merge: Cosign-Secrets, tickets-deploy-Runner, Host nach deploy/README.md."
     },
     {
       "name": "solar",
@@ -62,7 +57,8 @@
       "deployer": "app-deploy",
       "extra_required_checks": [
         "Lint & test"
-      ]
+      ],
+      "app": "solar"
     },
     {
       "name": "bahnbot",
@@ -70,8 +66,8 @@
       "ring": "stable",
       "gate_check": "Security / security-gate",
       "ct": 112,
-      "deployer": "own",
-      "note": "Abweichung: eigene release.yml und eigener Deployer, Signatur keyless trotz privat (Repo- und Workflow-Name im öffentlichen Rekor-Log). Hat einen Release-Policy-Job, den build-container.yml noch nicht hat."
+      "deployer": "app-deploy",
+      "app": "bahnbot"
     },
     {
       "name": "security-pipeline",

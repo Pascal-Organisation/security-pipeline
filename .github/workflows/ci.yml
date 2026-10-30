@@ -1,8 +1,9 @@
 ## CI gate — reusable. Every repo in Pascal-Organisation calls this on pull_request
 ## and on push. Nothing here builds a release or touches a host.
 ##
-## Visibility is never taken from an input: it is read from the repository the run
-## belongs to (github.event.repository.private). A public repo therefore ALWAYS runs on
+## Visibility is never taken from an input: the first job asks the API about the repository
+## the run belongs to, and fails closed. (github.event.repository is not relied on, because
+## it depends on the event's payload.) A public repo therefore ALWAYS runs on
 ## GitHub-hosted runners, whatever the caller passes — fork PRs can never reach the
 ## self-hosted runners on the Proxmox host.
 ##
@@ -42,6 +43,10 @@ on:
         description: "Comma-separated directories the dependency/IaC scan should skip (e.g. src/themes)."
         type: string
         default: ""
+    outputs:
+      private:
+        description: "'true' or 'false', from the API. build-container.yml picks its runner with it."
+        value: ${{ jobs.visibility.outputs.private }}
 
 permissions: {}
 
@@ -58,9 +63,28 @@ env:
   BANDIT_VERSION: "1.9.4"
 
 jobs:
+  visibility:
+    name: Repository visibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      private: ${{ steps.read.outputs.private }}
+    steps:
+      - id: read
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          private="$(curl -fsSL --max-time 20 -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY" | jq -r '.private')"
+          case "$private" in true|false) ;; *) echo "::error::could not read repository visibility"; exit 1;; esac
+          echo "private=$private" >> "$GITHUB_OUTPUT"
+
   workflow-lint:
     name: Workflow lint
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    needs: visibility
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -84,7 +108,8 @@ jobs:
 
   secrets:
     name: Secrets
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    needs: visibility
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -120,7 +145,8 @@ jobs:
 
   sast-public:
     name: SAST (public)
-    if: ${{ !github.event.repository.private && inputs.sast-languages != '' }}
+    needs: visibility
+    if: ${{ needs.visibility.outputs.private == 'false' && inputs.sast-languages != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -144,7 +170,8 @@ jobs:
 
   sast-private:
     name: SAST (private)
-    if: ${{ github.event.repository.private }}
+    needs: visibility
+    if: ${{ needs.visibility.outputs.private == 'true' }}
     runs-on: ${{ fromJSON(inputs.private-runner) }}
     timeout-minutes: 20
     permissions:
@@ -181,7 +208,8 @@ jobs:
 
   sast-python:
     name: SAST (Python)
-    if: ${{ github.event.repository.private && inputs.python-paths != '' }}
+    needs: visibility
+    if: ${{ needs.visibility.outputs.private == 'true' && inputs.python-paths != '' }}
     runs-on: ${{ fromJSON(inputs.private-runner) }}
     timeout-minutes: 10
     permissions:
@@ -207,7 +235,8 @@ jobs:
 
   dependencies:
     name: Dependencies & IaC
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    needs: visibility
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -256,8 +285,9 @@ jobs:
 
   dockerfile:
     name: Dockerfile lint
+    needs: visibility
     if: ${{ inputs.dockerfile != '' }}
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -277,7 +307,8 @@ jobs:
   # continue-on-error, would hold back Renovate's automerge. See docs/switching-tools.md.
   shell-lint:
     name: Shell lint (trial)
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    needs: visibility
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -303,7 +334,8 @@ jobs:
   # compose file names, so what actually runs on the hosts would otherwise go unscanned.
   runtime-images:
     name: Runtime images (trial)
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    needs: visibility
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -334,8 +366,8 @@ jobs:
   security-gate:
     name: security-gate
     if: ${{ always() }}
-    needs: [workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile]
-    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    needs: [visibility, workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile]
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions: {}
     steps:
