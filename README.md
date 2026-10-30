@@ -124,13 +124,21 @@ sie aktuell:
 jobs:
   security:
     uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v0.1.0
-    permissions:
+    permissions:          # Obergrenze für die verschachtelten Jobs
       contents: read
+      actions: read         # nur CodeQL (öffentlich) nutzt das
+      security-events: write
     with:
       private-runner: '["self-hosted","ci"]'
       python-paths: "src"
       dockerfile: Dockerfile
 ```
+
+GitHub prüft die `permissions` des Aufrufers gegen **jeden** verschachtelten Job –
+auch gegen Jobs, die übersprungen werden (CodeQL, keyless Signing in privaten Repos).
+Der Aufrufer gibt deshalb eine Obergrenze an; jeder Job hier deklariert selbst nur das,
+was er braucht. Für `build-container.yml` heißt das: `contents: read`,
+`packages: write`, `id-token: write`.
 
 Vollständige Beispiele:
 
