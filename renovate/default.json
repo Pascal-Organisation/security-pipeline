@@ -41,6 +41,30 @@
       ],
       "minimumReleaseAge": "0 days",
       "automerge": false
+    },
+    {
+      "description": "Language runtime base images (python, php, node, ...): moving the minor/major version changes the runtime, so it comes as a PR for review, never automerged. Digest refreshes of the same tag still automerge.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "python",
+        "php",
+        "node",
+        "golang",
+        "ruby",
+        "library/python",
+        "library/php",
+        "library/node"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "automerge": false,
+      "labels": [
+        "runtime-update"
+      ]
     }
   ],
   "customManagers": [
