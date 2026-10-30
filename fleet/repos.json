@@ -30,7 +30,8 @@
       "profile": "ci-only",
       "ring": "stable",
       "gate_check": "Security / security-gate",
-      "note": "Nicht gepflegt, Trivy rot (alte Abhängigkeiten): archivieren oder aktualisieren."
+      "note": "Nicht gepflegt, Trivy rot (alte Abhängigkeiten): archivieren oder aktualisieren.",
+      "rulesets": false
     },
     {
       "name": "pascalhaag-website",

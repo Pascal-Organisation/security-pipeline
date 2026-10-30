@@ -52,6 +52,7 @@ env:
   SEMGREP_IMAGE: semgrep/semgrep:1.183.0@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0
   TRUFFLEHOG_IMAGE: ghcr.io/trufflesecurity/trufflehog:3.99.7@sha256:0d003fc3abc4e1565eca8462b992001314de51451e96e3c44de80d116794d5d1
   TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  SHELLCHECK_IMAGE: koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
   HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
   ZIZMOR_VERSION: "1.31.1"
   BANDIT_VERSION: "1.9.4"
@@ -272,8 +273,64 @@ jobs:
           case "$DOCKERFILE" in *..*|/*|*[!A-Za-z0-9_./-]*) echo "::error::dockerfile path not allowed"; exit 1;; esac
           docker run --rm -v "$PWD:/src:ro" -w /src "$HADOLINT_IMAGE" hadolint --failure-threshold error "$DOCKERFILE"
 
+  # Trial (report-only, not in security-gate's needs): a red check, even with
+  # continue-on-error, would hold back Renovate's automerge. See docs/switching-tools.md.
+  shell-lint:
+    name: Shell lint (trial)
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck (report only)
+        run: |
+          mapfile -t files < <(git ls-files '*.sh')
+          [ "${#files[@]}" -gt 0 ] || { echo "no shell scripts"; exit 0; }
+          status=0
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" --severity=warning --format=gcc "${files[@]}" \
+            > "$RUNNER_TEMP/shellcheck.txt" || status=$?
+          cat "$RUNNER_TEMP/shellcheck.txt"
+          {
+            echo "### Shell lint (trial)"
+            echo "$(wc -l < "$RUNNER_TEMP/shellcheck.txt") finding(s) in ${#files[@]} script(s), exit $status"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Trial as well. The dependency scan reads files and never looks inside the images a
+  # compose file names, so what actually runs on the hosts would otherwise go unscanned.
+  runtime-images:
+    name: Runtime images (trial)
+    runs-on: ${{ github.event.repository.private && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan images named in compose files (report only)
+        run: |
+          mapfile -t composes < <(git ls-files '*compose*.yml' '*compose*.yaml')
+          [ "${#composes[@]}" -gt 0 ] || { echo "no compose files"; exit 0; }
+          # Images set through ${VAR} are this repo's own releases: build-container scans those.
+          mapfile -t images < <(sed -nE "s/^[[:space:]]*image:[[:space:]]*['\"]?([^'\"#[:space:]\$]+)['\"]?[[:space:]]*(#.*)?$/\1/p" "${composes[@]}" | sort -u)
+          echo "### Runtime images (trial)" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          for image in "${images[@]}"; do
+            [[ "$image" =~ ^[A-Za-z0-9._/:@-]+$ ]] || { echo "skipping odd image name"; continue; }
+            count="$(docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
+              -v "$RUNNER_TEMP/trivy-cache:/cache" "$TRIVY_IMAGE" image --quiet --scanners vuln \
+              --severity HIGH,CRITICAL --ignore-unfixed --format json "$image" \
+              | jq '[.Results[]?.Vulnerabilities[]?] | length')" || count="scan failed"
+            echo "- \`${image%%@*}\`: ${count} fixable HIGH/CRITICAL" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
   # The one check rulesets and release workflows depend on. New or replaced tools join
-  # `needs` here; a tool under trial stays out of `needs` and uses continue-on-error.
+  # `needs` here; a tool under trial stays out of `needs` and reports without failing.
   security-gate:
     name: security-gate
     if: ${{ always() }}

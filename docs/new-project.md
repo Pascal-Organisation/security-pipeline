@@ -125,6 +125,25 @@ Release-Pipeline grün bleibt.
 - `static-ftps`: Secrets `FTP_HOST`, `FTP_USER`, `FTP_PASS`; es wird nie gelöscht.
 - `dast.yml` nach dem Deploy aufrufen (oder vorher gegen Staging), nur gegen eigene Seiten.
 
+## Regel: Kein Deploy ohne grünes Gate
+
+Das gilt für **jedes** deployende Repo, auch privat. Der GitHub-Free-Plan kann in privaten
+Repos keinen Merge blockieren, ein Workflow kann aber den Deploy verweigern:
+
+```yaml
+deploy:
+  needs: [security, build] # bzw. build mit needs: ci
+  if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+```
+
+Ohne `if: always()`, sonst läuft der Job trotz rotem Gate. Eine Release per Tag prüft stattdessen
+den Check `Security / security-gate` für genau diesen Commit (`websiteghana`, Job `verify`).
+
+Grenze: Wer Schreibrechte hat, kann den Workflow selbst ändern und das `needs` entfernen. In
+privaten Repos ohne Schutz von `main` lässt sich das nicht ausschließen. Das Ziel muss deshalb
+selbst prüfen, wo es geht: `app-deploy` nimmt nur Images mit gültiger Signatur und Provenance.
+Statische Artefakte sind noch unsigniert (siehe Roadmap).
+
 ## 5. In die Flotte eintragen
 
 `fleet/repos.json` per PR ergänzen:
@@ -139,7 +158,7 @@ mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.json` vorbeh
 ## 6. Prüfen und scharf schalten
 
 1. PR im neuen Repo: `Security / security-gate` muss grün sein.
-2. Einen Fehler gegenprüfen: Ein rotes Gate sollte den Release wirklich stoppen.
+2. Prüfen, dass der Deploy per `needs` am Gate hängt (siehe Regel oben).
 3. `tools/fleet-status.sh` zeigt das Repo mit aktuellem Pin.
 4. Öffentliches Repo: `tools/fleet-rulesets.sh`, Ausgabe lesen, dann `--apply`. Private Repos
    lassen sich im GitHub-Free-Plan nicht schützen; das Gate meldet dort nur.

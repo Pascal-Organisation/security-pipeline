@@ -53,6 +53,9 @@ upsert() {
 
 jq -c '.repos[]' "$MANIFEST" | while read -r entry; do
   repo="$(jq -r .name <<<"$entry")"
+  if [ "$(jq -r '.rulesets // true' <<<"$entry")" = false ]; then
+    echo "$repo: skipped (rulesets: false in the manifest)"; continue
+  fi
   upsert "$repo" "$(branch_ruleset "$(jq -c '[.gate_check] + (.extra_required_checks // [])' <<<"$entry")")"
   [ "$repo" = security-pipeline ] && upsert "$repo" "$(tag_ruleset)"
 done

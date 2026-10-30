@@ -32,7 +32,7 @@ Zwei Achsen bestimmen, was ein Repo bekommt:
 | Runner | GitHub-hosted (erzwungen) | eigene Self-hosted Runner (Proxmox) |
 | SAST | CodeQL | Semgrep (+ Bandit für Python) |
 | Signatur | Cosign keyless (Sigstore, OIDC) | Cosign Key-Pair, **kein** Eintrag im öffentlichen Rekor-Log |
-| Schutz von `main` | Rulesets / Branch Protection | Deploy nur aus `main`; Host prüft Signatur & Herkunft |
+| Schutz von `main` | Rulesets: `security-gate` ist Pflicht für den Merge | Merge nicht blockierbar (GitHub Free), aber **kein Deploy ohne grünes Gate**; Host prüft Signatur & Herkunft |
 | Deploy | Pull: Host-Timer holt `:latest`, prüft, startet | Push: Deploy-Runner bittet Host per SSH-Forced-Command |
 
 | | **Container** | **Statisch** |
