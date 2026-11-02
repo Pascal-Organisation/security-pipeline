@@ -26,14 +26,6 @@
       "gate_check": "Security / security-gate"
     },
     {
-      "name": "Poose3",
-      "profile": "ci-only",
-      "ring": "stable",
-      "gate_check": "Security / security-gate",
-      "note": "Nicht gepflegt, Trivy rot (alte Abhängigkeiten): archivieren oder aktualisieren.",
-      "rulesets": false
-    },
-    {
       "name": "pascalhaag-website",
       "profile": "container-pull",
       "ring": "stable",
@@ -46,7 +38,8 @@
       "name": "websiteghana",
       "profile": "static-ftps",
       "ring": "stable",
-      "gate_check": "Security / security-gate"
+      "gate_check": "Security / security-gate",
+      "note": "FTPS-Upload GitHub-hosted (deploy-static.yml); Prod-Release per release-*-Tag."
     },
     {
       "name": "solar",

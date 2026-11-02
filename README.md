@@ -90,8 +90,10 @@ abgelehnt. Die Datei darf nicht ohne die Überlappung aus
 
 Für Ziele, die selbst nichts prüfen können. Vor dem Upload prüft der Workflow selbst, dass der
 Commit auf `main` liegt und `Security / security-gate` grün ist, und untersucht das Artefakt (nur
-Dateien/Ordner, keine Links, keine `..`). Dann lädt er per FTPS hoch, **nie mit Löschen**. `ssh` als
-Transport bleibt nur, bis `pascalhaag-website` umgezogen ist.
+Dateien/Ordner, keine Links, keine `..`). Dann lädt er per FTPS hoch, **nie mit Löschen**. Er läuft
+GitHub-hosted (`deploy-runner: '"ubuntu-24.04"'`): Das Ziel ist öffentliches Shared Hosting, eine eigene
+Deploy-VM brächte nur ein Egress-Loch für FTP. `ssh` als Transport nutzt kein Repo mehr
+(`pascalhaag-website` ist seit v2 `container-pull`) und fliegt mit dem nächsten Major.
 
 ### `dast.yml` – von außen gegen die laufende Seite
 
@@ -186,14 +188,14 @@ Repos mit `container-pull` brauchen keine: Der Host holt selbst. Nur `static-ftp
 
 | Rolle | Labels in den Workflows | genutzt von | Netz |
 |---|---|---|---|
-| CI (VM 110) | `ci` | `homelab`, `knowledgebase`, `workingrepo`, `tickets` | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
+| CI (VM 110) | `ci` | `homelab`, `knowledgebase`, `workingrepo` | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
 | CI, eigener Runner pro Repo | `pascalhaag-website`, `websiteghana`, `bahnbot` | das jeweilige Repo | wie `ci` |
-| Deploy (VM 111) | `pascalhaag-website-deploy`, `websiteghana-deploy`, `tickets-deploy` | nur Deploy-Jobs des jeweiligen Repos | nur zu den Zielhosts (+ GitHub) |
-| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos, DAST und Re-Scan auch für private | – |
+| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos; für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
 
-Regeln: CI- und Deploy-Runner auf getrennten VMs, beide per Proxmox-Firewall vom LAN
-getrennt; Self-hosted Runner nie für öffentliche Repos freigeben. Der Signier-Job von
-`tickets` läuft derzeit auf `ci`, also auf derselben VM wie Builds und Tests (siehe Grenzen).
+Regeln: Es gibt keinen Deploy-Runner mehr. Container-Hosts holen sich signierte Images selbst
+(`app-deploy`), Shared Hosting bekommt seinen Upload von einem GitHub-hosted Runner. Die CI-VM
+ist per Proxmox-Firewall vom LAN getrennt; Self-hosted Runner nie für öffentliche Repos freigeben.
+Signiert wird immer GitHub-hosted, nie auf der CI-VM.
 
 **Grenzen, offen benannt:**
 - Die Runner sind **persistent**, nicht pro Job neu (Stand laut homelab- und
