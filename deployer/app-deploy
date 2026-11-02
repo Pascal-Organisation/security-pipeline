@@ -10,7 +10,10 @@
 #   1. signature    cosign verify, keyless: signed by security-pipeline's build-container.yml
 #                   for exactly this repository on refs/heads/main. Only that workflow can
 #                   produce this identity, and it signs after its release policy and
-#                   security gate passed, so the signature proves both ran.
+#                   security gate passed, so the signature proves both ran. Callers pin the
+#                   workflow by commit, so the identity ends in @<sha>; only the release
+#                   commits in /etc/app-deploy/trusted-pipeline are accepted. A branch with a
+#                   gutted build-container.yml signs as @<its sha> and is refused.
 #   2. pipeline     the image carries a CycloneDX SBOM attestation and a SLSA provenance
 #                   attestation whose predicate names THIS repository and refs/heads/main
 #                   and the commit in the image label.
@@ -30,7 +33,7 @@
 set -euo pipefail
 umask 022
 
-APP_DEPLOY_VERSION="v2.0.0"
+APP_DEPLOY_VERSION="v2.1.0"
 [[ "${1:-}" == --version ]] && { echo "$APP_DEPLOY_VERSION"; exit 0; }
 
 APP="${1:-}"
@@ -47,8 +50,8 @@ source "$CONF"
 : "${REPOSITORY:?REPOSITORY not set in $CONF}"  # e.g. Pascal-Organisation/tickets
 : "${DEPLOY_DIR:?DEPLOY_DIR not set in $CONF}"  # e.g. /srv/tickets
 : "${SERVICES:?SERVICES not set in $CONF}"      # space-separated compose services to health-wait for
-# Trust during a signing migration: a conf may widen SIGNER_REGEXP for the overlap, then
-# narrow it again. See docs/switching-tools.md.
+# Trust during a signing migration: a conf may set SIGNER_REGEXP for the overlap, then
+# remove it again. See docs/switching-tools.md. Unset, it is built from TRUSTED_PIPELINE.
 IMAGE_VAR="${IMAGE_VAR:-APP_IMAGE}"              # variable name compose reads the image from
 BUILT_VAR="${BUILT_VAR:-APP_BUILT_AT}"
 COMPOSE_FROM_IMAGE="${COMPOSE_FROM_IMAGE:-}"     # path inside the image, e.g. /app/deploy/docker-compose.yml
@@ -56,7 +59,9 @@ BUNDLE_FROM_IMAGE="${BUNDLE_FROM_IMAGE:-}"       # directory inside the image, c
 BACKUP_HOOK="${BACKUP_HOOK:-}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 MAX_RESTARTS="${MAX_RESTARTS:-3}"
-SIGNER_REGEXP="${SIGNER_REGEXP:-^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/build-container\.yml@}"
+SIGNER_REGEXP="${SIGNER_REGEXP:-}"
+# Release commits of security-pipeline, one 40-hex SHA per line (written by fleet-hosts --upgrade).
+TRUSTED_PIPELINE=/etc/app-deploy/trusted-pipeline
 OIDC_ISSUER="https://token.actions.githubusercontent.com"
 
 # Registry login for private images, readable by root only.
@@ -91,6 +96,16 @@ label() {
   printf '%s' "$v"
 }
 to_epoch() { date -d "$1" +%s 2>/dev/null || true; }
+
+# The signer identity, pinned to trusted release commits. Fails closed: no list, no deploy.
+trusted_signer_regexp() {
+  local shas
+  [[ -f "$TRUSTED_PIPELINE" && "$(stat -c '%u' "$TRUSTED_PIPELINE")" == 0 ]] || return 1
+  (( (8#$(stat -c '%a' "$TRUSTED_PIPELINE") & 8#022) == 0 )) || return 1
+  shas="$(grep -oE '^[0-9a-f]{40}\b' "$TRUSTED_PIPELINE" | paste -sd'|')"
+  [[ -n "$shas" ]] || return 1
+  printf '^https://github\\.com/Pascal-Organisation/security-pipeline/\\.github/workflows/build-container\\.yml@(%s)$' "$shas"
+}
 
 write_image_env() {
   local tmp
@@ -261,6 +276,10 @@ digest="${candidate#*@}"
 if [[ "$candidate" == "$current" ]]; then log "already running ${digest}"; exit 0; fi
 
 # Gate 1+2: authenticity and pipeline provenance, against the digest, before anything runs.
+if [[ -z "$SIGNER_REGEXP" ]]; then
+  SIGNER_REGEXP="$(trusted_signer_regexp)" \
+    || die "no trusted pipeline commits in ${TRUSTED_PIPELINE} (root-owned, not group/world-writable); run fleet-hosts --upgrade"
+fi
 log "verifying signature + attestations for ${digest} ..."
 if ! verify "$candidate"; then
   docker rmi "$candidate" >/dev/null 2>&1 || true

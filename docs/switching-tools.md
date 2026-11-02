@@ -37,13 +37,18 @@ Major: Renovate merged das nicht selbst.
 
 Hier hängt zusätzlich der Host dran, deshalb mit Überlappung:
 
-1. In `/etc/app-deploy/<app>.conf` beide Identitäten erlauben:
-   `SIGNER_REGEXP='^https://…/alt\.yml@|^https://…/neu\.yml@'`.
+1. In `/etc/app-deploy/<app>.conf` beide Identitäten erlauben, beide auf Release-Commits gepinnt:
+   `SIGNER_REGEXP='^https://…/alt\.yml@(<sha>)$|^https://…/neu\.yml@(<sha>)$'`.
+   Ein gesetztes `SIGNER_REGEXP` ersetzt die Liste in `/etc/app-deploy/trusted-pipeline`.
 2. Pipeline umstellen, releasen, einen Deploy abwarten.
-3. Die alte Identität aus der `.conf` entfernen.
+3. `SIGNER_REGEXP` aus der `.conf` entfernen; ab dann gilt wieder die Liste.
 
-`build-container.yml` nicht umbenennen oder verschieben, ohne Schritt 1: Der Standard-
-`SIGNER_REGEXP` nennt genau diesen Pfad.
+`build-container.yml` nicht umbenennen oder verschieben, ohne Schritt 1: Die Liste erlaubt genau
+diesen Pfad.
+
+Neue Pipeline-Releases muss jeder Host kennen, bevor ein Aufrufer sie nutzt: erst Tag, dann
+`tools/fleet-hosts.sh --upgrade <tag>`, dann die Aufrufer (Renovate) anheben. Ein Release aus
+einem Commit, der nicht auf `main` liegt, landet nie in der Liste.
 
 ## Rollout-Ringe
 

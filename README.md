@@ -5,7 +5,7 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> **v2.0.0.** Ein Weg für Releases, ein Weg für Deploys. Tools lassen sich hier zentral tauschen:
+> **v2.1.0.** Ein Weg für Releases, ein Weg für Deploys; Hosts vertrauen nur Release-Commits der Pipeline. Tools lassen sich hier zentral tauschen:
 > [docs/switching-tools.md](docs/switching-tools.md). Neues Projekt anbinden:
 > [docs/new-project.md](docs/new-project.md). Stand: `tools/fleet-status.sh` (Repos),
 > `tools/fleet-hosts.sh` (was wirklich auf den Hosts läuft).
@@ -74,8 +74,13 @@ nichts. Fork-PRs können die eigenen Runner so nie erreichen.
 8. **Cosign keyless:** Signatur + Attestations auf einem GitHub-hosted Runner, ohne Repo-Code und
    ohne Scanner
 
-Der Host prüft auf genau diese Workflow-Identität. Deshalb darf die Datei nicht ohne die
-Überlappung aus [docs/switching-tools.md](docs/switching-tools.md) umbenannt werden.
+Der Host prüft auf genau diese Workflow-Identität, und zwar auf den Commit: Aufrufer pinnen per
+SHA, die Identität endet also auf `build-container.yml@<sha>`. `app-deploy` nimmt nur die
+Release-Commits aus `/etc/app-deploy/trusted-pipeline` an, die `tools/fleet-hosts.sh --upgrade`
+schreibt: Tags ab v2.0.0, deren Commit auf dem geschützten `main` liegt. Ein Branch mit einem
+entkernten `build-container.yml` signiert zwar gültig, aber als `@<branch-sha>` und wird
+abgelehnt. Die Datei darf nicht ohne die Überlappung aus
+[docs/switching-tools.md](docs/switching-tools.md) umbenannt werden.
 
 ### `deploy-static.yml` – Shared Hosting (privat)
 
@@ -193,8 +198,9 @@ getrennt; Self-hosted Runner nie für öffentliche Repos freigeben. Der Signier-
 ## Host-Setup (Container-Apps)
 
 ```bash
-install -m 0755 deployer/app-deploy /usr/local/sbin/app-deploy    # danach: tools/fleet-hosts.sh --upgrade <tag>
 install -d -m 0755 /etc/app-deploy
+# app-deploy und die Liste vertrauenswürdiger Pipeline-Commits kommen per
+# tools/fleet-hosts.sh --upgrade <tag> (nach Eintrag des Hosts in fleet/repos.json)
 install -m 0644 deployer/app.conf.example /etc/app-deploy/<app>.conf   # anpassen
 # privates Image: Lese-Login, nur für root
 install -d -m 0700 /etc/app-deploy/docker
@@ -203,6 +209,8 @@ DOCKER_CONFIG=/etc/app-deploy/docker docker login ghcr.io -u <konto>
 
 - systemd-Timer ruft `/usr/local/sbin/app-deploy <app>` auf.
 - Voraussetzungen: `cosign` ≥ v3, `jq`, Docker Compose v2, `flock`.
+- Ohne `/etc/app-deploy/trusted-pipeline` (root, nicht gruppen-/weltbeschreibbar) deployt
+  `app-deploy` nichts.
 - Lokal: `SSH_ORIGINAL_COMMAND=status|rollback|unhold /usr/local/sbin/app-deploy <app>`.
 
 ## Ausnahmen
