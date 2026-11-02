@@ -53,6 +53,16 @@ on:
         description: "Passed to ci.yml."
         type: string
         default: ""
+    secrets:
+      # Optional: without them the SBOM upload to Dependency-Track is skipped, nothing else changes.
+      DTRACK_API_KEY:
+        description: "Dependency-Track API key (team Automation: BOM_UPLOAD, PROJECT_CREATION_UPLOAD)."
+        required: false
+      DTRACK_ACCESS_CLIENT_ID:
+        description: "Cloudflare Access service token for dtrack.pascalhaag.de/api/v1/bom."
+        required: false
+      DTRACK_ACCESS_CLIENT_SECRET:
+        required: false
     outputs:
       image:
         value: ${{ jobs.build.outputs.image }}
@@ -64,7 +74,7 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v2.1.0
+  PIPELINE_VERSION: v2.2.0
   TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
   SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
 
@@ -295,3 +305,41 @@ jobs:
             --certificate-github-workflow-ref refs/heads/main > /dev/null
           docker logout ghcr.io
           echo "Signed $REF (keyless)" >> "$GITHUB_STEP_SUMMARY"
+
+  # The signed SBOM goes to Dependency-Track, which re-checks it against new CVEs every day.
+  # Reporting only: an outage there must never stop a release that is already signed.
+  sbom-upload:
+    name: SBOM to Dependency-Track
+    needs: [build, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: attestations
+
+      - name: Upload
+        env:
+          DTRACK_URL: https://dtrack.pascalhaag.de
+          API_KEY: ${{ secrets.DTRACK_API_KEY }}
+          CF_ID: ${{ secrets.DTRACK_ACCESS_CLIENT_ID }}
+          CF_SECRET: ${{ secrets.DTRACK_ACCESS_CLIENT_SECRET }}
+          REPO: ${{ github.event.repository.name }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          if [ -z "$API_KEY" ] || [ -z "$CF_ID" ] || [ -z "$CF_SECRET" ]; then
+            echo "Dependency-Track: no secrets passed, upload skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Version = commit; isLatest marks it as what main ships now, older versions stay for history.
+          code="$(curl -sS -o resp.json -w '%{http_code}' -m 60 -X POST "$DTRACK_URL/api/v1/bom" \
+            -H "X-Api-Key: $API_KEY" -H "CF-Access-Client-Id: $CF_ID" -H "CF-Access-Client-Secret: $CF_SECRET" \
+            -F autoCreate=true -F isLatest=true -F "projectName=$REPO" -F "projectVersion=${GITHUB_SHA:0:12}" \
+            -F "projectTags=image:${DIGEST#sha256:}" -F bom=@sbom.cdx.json)"
+          if [ "$code" != 200 ]; then
+            echo "::warning::Dependency-Track upload failed (HTTP $code)"
+            exit 1
+          fi
+          echo "Dependency-Track: SBOM for $REPO@${GITHUB_SHA:0:12} uploaded (token $(jq -r .token resp.json))" >> "$GITHUB_STEP_SUMMARY"
