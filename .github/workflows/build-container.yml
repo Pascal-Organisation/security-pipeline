@@ -74,7 +74,7 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v2.2.0
+  PIPELINE_VERSION: v2.3.0
   TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
   SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
 
@@ -201,6 +201,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/attest"
           docker run --rm -v "$TAR:/img.tar:ro" "$SYFT_IMAGE" \
             docker-archive:/img.tar -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
+          # OS packages: drop Syft's guessed CPEs. Distros backport fixes without changing the
+          # upstream version, so NVD matching on cpe:...:openssl:3.5.7 reports CVEs Debian already
+          # fixed. Without a CPE, Dependency-Track judges them by purl against OSV (Debian/Alpine
+          # security trackers), the same data the Trivy gate uses. Language packages keep theirs.
+          jq '.components |= map(if ((.purl // "") | test("^pkg:(deb|apk|rpm)/"))
+                then del(.cpe) | .properties |= ((. // []) | map(select(.name != "syft:cpe23")))
+                else . end)' "$RUNNER_TEMP/attest/sbom.cdx.json" > "$RUNNER_TEMP/attest/sbom.tmp"
+          mv "$RUNNER_TEMP/attest/sbom.tmp" "$RUNNER_TEMP/attest/sbom.cdx.json"
           jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "$RUNNER_TEMP/attest/sbom.cdx.json" > /dev/null
 
       - id: push

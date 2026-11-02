@@ -5,7 +5,7 @@ Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
 Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
 überall.
 
-> **v2.1.0.** Ein Weg für Releases, ein Weg für Deploys; Hosts vertrauen nur Release-Commits der Pipeline. Tools lassen sich hier zentral tauschen:
+> **v2.3.0.** Ein Weg für Releases, ein Weg für Deploys; Hosts vertrauen nur Release-Commits der Pipeline, signierte SBOMs gehen an Dependency-Track. Tools lassen sich hier zentral tauschen:
 > [docs/switching-tools.md](docs/switching-tools.md). Neues Projekt anbinden:
 > [docs/new-project.md](docs/new-project.md). Stand: `tools/fleet-status.sh` (Repos),
 > `tools/fleet-hosts.sh` (was wirklich auf den Hosts läuft).
@@ -67,7 +67,10 @@ nichts. Fork-PRs können die eigenen Runner so nie erreichen.
 2. **Gate:** dieselbe `ci.yml` wie im PR
 3. `docker build` mit OCI-Labels (`created` ist Pflicht: Replay-Schutz auf dem Host)
 4. **Trivy image** – Gate: fixable HIGH/CRITICAL + eingebettete Secrets
-5. **Syft** – SBOM im **CycloneDX**-Format
+5. **Syft** – SBOM im **CycloneDX**-Format. Betriebssystem-Pakete (`pkg:deb`, `pkg:apk`) verlieren
+   dabei die von Syft geratenen CPEs: Distributionen backporten Fixes ohne neue Upstream-Version, ein
+   NVD-Abgleich per CPE meldet sonst längst behobene CVEs. Dependency-Track prüft sie per purl gegen
+   OSV (Debian/Alpine), also gegen dieselben Daten wie das Trivy-Gate.
 6. Push nach `ghcr.io/pascal-organisation/<repo>` – genau das gescannte Tar, kein Rebuild
 7. **SLSA-v1-Provenance** – ehrlich eingeordnet: Build **L1 + Signatur**. L2/L3 bräuchte Provenance
    von der Build-Plattform selbst.
