@@ -73,6 +73,10 @@ nichts. Fork-PRs können die eigenen Runner so nie erreichen.
    von der Build-Plattform selbst.
 8. **Cosign keyless:** Signatur + Attestations auf einem GitHub-hosted Runner, ohne Repo-Code und
    ohne Scanner
+9. **Dependency-Track:** das signierte SBOM geht als Projekt `<repo>`, Version = Commit, an
+   `dtrack.pascalhaag.de` (über einen Access-Service-Token, der nur `/api/v1/bom` öffnet). Nur
+   berichtend: Fällt Dependency-Track aus, bleibt das Release grün. Ohne die drei Secrets
+   `DTRACK_*` wird der Schritt übersprungen.
 
 Der Host prüft auf genau diese Workflow-Identität, und zwar auf den Commit: Aufrufer pinnen per
 SHA, die Identität endet also auf `build-container.yml@<sha>`. `app-deploy` nimmt nur die
@@ -103,9 +107,9 @@ ohne geladene Templates), ist **kein** Pass. Templates sind auf ein Release gepi
 
 ### `image-rescan.yml` – wöchentlicher Re-Scan
 
-Scannt `ghcr.io/<repo>:latest` mit frischen CVE-Daten (per `schedule:` aufrufen). Überbrückt
-die Zeit bis Dependency-Track: neue fixable HIGH/CRITICAL in bereits ausgerollten Images
-werden sichtbar.
+Scannt `ghcr.io/<repo>:latest` mit frischen CVE-Daten (per `schedule:` aufrufen). Wird
+abgelöst, sobald alle Container-Repos ihr SBOM an Dependency-Track schicken: Das prüft jedes
+hochgeladene SBOM täglich gegen neue CVEs.
 
 Bekannte Grenzen: Der Re-Scan checkt kein Repo aus, Ausnahmen aus `.security/exceptions.json`
 gelten hier also nicht. Und er scannt `:latest`, nicht zwingend den Digest, der auf dem
@@ -143,6 +147,16 @@ auch gegen Jobs, die übersprungen werden (CodeQL, keyless Signing in privaten R
 Der Aufrufer gibt deshalb eine Obergrenze an; jeder Job hier deklariert selbst nur das,
 was er braucht. Für `build-container.yml` heißt das: `contents: read`, `actions: read`,
 `security-events: write`, `pull-requests: read`, `packages: write`, `id-token: write`.
+
+Für Dependency-Track gibt der Release-Job die drei Repo-Secrets ausdrücklich weiter (nicht
+`secrets: inherit`, damit die Pipeline nur sieht, was sie braucht):
+
+```yaml
+    secrets:
+      DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+      DTRACK_ACCESS_CLIENT_ID: ${{ secrets.DTRACK_ACCESS_CLIENT_ID }}
+      DTRACK_ACCESS_CLIENT_SECRET: ${{ secrets.DTRACK_ACCESS_CLIENT_SECRET }}
+```
 
 Vollständige Beispiele: `solar` (öffentlich), `bahnbot` (privat), `websiteghana` (FTPS).
 
@@ -246,8 +260,6 @@ Durchsicht. Die eigenen Workflows laufen in Ringen: `workingrepo` und
 
 ## Roadmap
 
-- **Dependency-Track** (self-hosted): SBOMs aller Releases, Alarm bei neuen CVEs in
-  bereits deployten Versionen
 - **Harbor** statt GHCR: Registry-seitig unsignierte Images ablehnen
 - Org-Rulesets für öffentliche Repos (signierte Commits, required checks)
 - **Statische Deploys absichern (vorgezogen):** Signatur fürs Artefakt (`cosign sign-blob`)
