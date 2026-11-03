@@ -1,0 +1,13 @@
+# /opt/kata/share/defaults/kata-containers/runtimes/qemu/config.d/50-sizing.toml on the k3s node.
+#
+# Boot every job microVM at its final size instead of hot-plugging vCPUs/memory for pod limits.
+# Hot-plugged vCPUs inside a nested VM stalled ("rcu_sched self-detected stall on CPU <hot-plugged id>",
+# "OOM is now expected behavior"), the kata-agent died and the job with it. Pods therefore set
+# requests only (for the scheduler), no limits.
+# kata-deploy does not manage config.d; reinstalling Kata keeps this file, a fresh node needs it copied.
+[hypervisor.qemu]
+default_vcpus = 2
+default_memory = 3584
+# All guest file I/O (rootfs, work dir, the Docker disk image) goes through virtiofsd; Kata's default of
+# one worker thread serialised heavy jobs until the guest stopped answering the agent health check.
+virtio_fs_extra_args = ["--thread-pool-size=8", "--announce-submounts"]
