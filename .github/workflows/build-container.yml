@@ -318,9 +318,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # The registry login and the image bytes are removed for certain (a failure here fails the job). The state of
+      # rootless BuildKit is not: its snapshots belong to subordinate uids of BuildKit's user namespace, which the
+      # runner user cannot delete (v3.0.0 failed here, after the push, so signing was skipped). Delete it from
+      # inside that namespace (rootlesskit, same uid mapping as `bk`) and only warn if that fails: the ARC pod and
+      # the GitHub-hosted VM are discarded after the job anyway.
       - name: Clean up
         if: always()
-        run: rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar" "$RUNNER_TEMP/image-layout" "$RUNNER_TEMP/buildkit-state"
+        run: |
+          rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar" "$RUNNER_TEMP/image-layout"
+          # GitHub-hosted only (the CI cluster ignores it): same profiles as the build, rootlesskit needs user namespaces.
+          export TB_RUN_OPTS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined"
+          for d in "$RUNNER_TEMP/buildkit-state" "$RUNNER_TEMP/xdg-run"; do
+            [ -e "$d" ] || continue
+            tb rootlesskit rm -rf "$d" 2>/dev/null || rm -rf "$d" 2>/dev/null \
+              || echo "::warning::could not fully remove $d (rootless BuildKit state; the runner is discarded after the job)"
+          done
 
   sign:
     name: Sign & attest
