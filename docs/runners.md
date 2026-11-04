@@ -76,8 +76,10 @@ nie, sie bekommen nur eine Just-in-time-Registrierung für genau einen Job.
 - Der Namespace der Runner darf kein Pod-Security-`enforce=baseline/restricted` tragen.
 - Im Build sind IDs über 64999 (z. B. 65534 `nobody`) nicht abgebildet; ein `chown` darauf scheitert.
 - Das Toolbox-Image ist selbst Teil der Lieferkette und wird mit Docker auf einem GitHub-hosted Runner
-  gebaut (es kann sich nicht selbst bauen). Das Registry-Paket ist privat, die Pods brauchen ein
-  `imagePullSecret` mit `read:packages`.
+  gebaut (es kann sich nicht selbst bauen). Das Paket `ci-toolbox` muss **öffentlich** sein (es enthält
+  nichts Geheimes, ist aus einem öffentlichen Repo gebaut und signiert): Nur dann ziehen es GitHub-hosted
+  Runner und die Cluster-Pods ohne Zugangsdaten. Bleibt es privat, scheitert `docker pull` auf GitHub-hosted
+  Runnern mit `unauthorized`, und die Pods brauchen ein `imagePullSecret` mit `read:packages`.
 - Der Pfad auf GitHub-hosted Runnern (`docker run` mit `seccomp`/`apparmor=unconfined` für
   BuildKit) betrifft nur öffentliche Repos und Signieren/Re-Scan; dort ist der Runner ohnehin
   eine Wegwerf-VM von GitHub.
@@ -116,8 +118,8 @@ Für alle, die das nachbauen – jeder davon hat Jobs scheitern lassen:
    ändert auf GitHub nichts – Jobs bleiben ungezuordnet. Labels ändern = `helm uninstall` + `install`.
 10. **Nicht das Pod-Template ändern, während Runner Jobs haben.** ARC ersetzt dann Runner, denen GitHub
     schon Jobs zugeteilt hat; die Jobs hängen, bis man den Run abbricht.
-11. **Privates Registry-Paket braucht ein `imagePullSecret`.** Ohne `ErrImagePull` und ein Job, der
-    ewig auf einen Runner wartet.
+11. **Privates Registry-Paket.** Ohne `imagePullSecret` `ErrImagePull` im Pod und ein Job, der ewig auf einen
+    Runner wartet; auf GitHub-hosted Runnern `unauthorized`. Lösung: Paket öffentlich stellen.
 
 ### Warum nicht Kata
 
