@@ -1,0 +1,4 @@
+# Runner label of the self-hosted CI cluster (ARC scale set "arc-ci"), used by ci.yml and build-container.yml.
+self-hosted-runner:
+  labels:
+    - arc-ci

@@ -58,6 +58,8 @@ RUN python3 -m venv /opt/py \
  && cosign version >/dev/null 2>&1 && crane version >/dev/null && buildctl --version >/dev/null \
  && buildkitd --version >/dev/null && rootlesskit --version >/dev/null \
  && semgrep --version >/dev/null && zizmor --version >/dev/null && bandit --version >/dev/null
+# tells the workflows' `tb` wrapper (ci.yml) to run tools directly instead of via docker run
+ENV TOOLBOX_NATIVE=1
 USER runner
 LABEL org.opencontainers.image.source="https://github.com/Pascal-Organisation/security-pipeline" \
       org.opencontainers.image.description="security-pipeline CI toolbox: runner + scanners + rootless BuildKit, no Docker daemon"

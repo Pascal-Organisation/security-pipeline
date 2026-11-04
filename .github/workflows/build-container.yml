@@ -2,7 +2,7 @@
 ##
 ##   policy : the commit is on main, GitHub-verified, and the merge result of a PR
 ##   gate   : ci.yml, the same security-gate as on pull requests
-##   build  : image tar (BuildKit in the CI cluster, docker on GitHub-hosted) -> Trivy image gate on the
+##   build  : image tar (BuildKit, rootless; GitHub-hosted starts the toolbox with docker run) -> Trivy image gate on the
 ##            tar -> Syft SBOM (CycloneDX) from the tar -> crane pushes THAT tar to GHCR
 ##            -> SLSA v1 provenance predicate for the pushed digest
 ##   sign   : keyless Cosign (GitHub OIDC -> Fulcio, logged in Rekor), on a GitHub-hosted runner
@@ -15,10 +15,13 @@
 ## Cost, accepted: Rekor is public, so repo and workflow names of private repos appear there.
 ## No code does.
 ##
-## The image that is pushed is byte-for-byte the tar Trivy scanned: crane pushes the scanned file,
-## no daemon in between (v3). The signing job runs no third-party scanner and no repo code.
-## Private repos build in the CI cluster (scale set "arc-ci": fresh pod per job, user namespaces,
-## BuildKit as a sidecar); public repos on GitHub-hosted runners. Tools: the ci-toolbox (see ci.yml).
+## The image that is pushed is byte-for-byte what Trivy scanned: BuildKit writes an OCI tar, Trivy and
+## Syft read it, crane pushes it (unpacked, never re-built or re-tagged by a daemon) and the digest crane
+## reports must equal the manifest digest inside that tar. No Docker daemon builds or pushes anything (v3).
+## The signing job runs no third-party scanner and no repo code.
+## Private repos build in the CI cluster (scale set "arc-ci": fresh pod per job, user namespaces, not
+## privileged; the pod is the ci-toolbox and runs BuildKit rootless, in-process); public repos on
+## GitHub-hosted runners, where the same toolbox image is started with `docker run` (see ci.yml, `tb`).
 ##
 ## Outputs image + digest.
 name: build-container (reusable)
@@ -26,6 +29,10 @@ name: build-container (reusable)
 on:
   workflow_call:
     inputs:
+      private-runner:
+        description: "Deprecated, ignored (kept so that existing callers keep working): private repos always use the CI cluster (arc-ci)."
+        type: string
+        default: ""
       context:
         type: string
         default: "."
@@ -33,7 +40,7 @@ on:
         type: string
         default: "Dockerfile"
       target:
-        description: "Optional build stage (docker build --target)."
+        description: "Optional build stage of the Dockerfile (BuildKit target)."
         type: string
         default: ""
       submodules:
@@ -130,20 +137,24 @@ jobs:
           persist-credentials: false
           submodules: ${{ inputs.submodules }}
 
-      # Registry login only in this job's temp dir, never in a home directory.
+      # crane keeps its registry login in DOCKER_CONFIG (the standard location, no Docker needed):
+      # in this job's temp dir only, never in a home directory.
       - name: Isolate registry config
         run: |
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
 
+      # `tb <tool> ...`: see ci.yml. Here the wrapper also passes the BuildKit settings through and
+      # takes extra `docker run` options in TB_RUN_OPTS (GitHub-hosted only; the CI cluster ignores them).
       - name: Toolbox
         run: |
-          # tb <tool> ...: natively in the CI cluster (the runner is the toolbox), else from the toolbox image
           mkdir -p "$RUNNER_TEMP/tb"
           cat > "$RUNNER_TEMP/tb/tb" <<'EOF'
           #!/bin/sh
           [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
-          exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
+          # shellcheck disable=SC2086 # TB_RUN_OPTS is set by this workflow, never from an input
+          exec docker run --rm $TB_RUN_OPTS -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
+            -e XDG_RUNTIME_DIR -e XDG_DATA_HOME -e BUILDKITD_FLAGS \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
           EOF
           chmod 755 "$RUNNER_TEMP/tb/tb"; echo "$RUNNER_TEMP/tb" >> "$GITHUB_PATH"
@@ -166,25 +177,24 @@ jobs:
           # image not built strictly later than the one running (replay protection).
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           source="https://github.com/$GITHUB_REPOSITORY"
-          if [ -n "${TOOLBOX_NATIVE:-}" ]; then
-            # CI cluster: BuildKit sidecar (BUILDKIT_HOST), fresh per job, so no cache from other jobs;
-            # base images are always resolved from the registry.
-            opts=(--opt "filename=$(basename "$DOCKERFILE")" --opt "build-arg:GIT_SHA=$GITHUB_SHA"
-                  --opt "label:org.opencontainers.image.created=$created"
-                  --opt "label:org.opencontainers.image.revision=$GITHUB_SHA"
-                  --opt "label:org.opencontainers.image.source=$source" --opt image-resolve-mode=pull)
-            [ -n "$TARGET" ] && opts+=(--opt "target=$TARGET")
-            buildctl build --frontend dockerfile.v0 --local "context=$CONTEXT" --local "dockerfile=$(dirname "$DOCKERFILE")" \
-              "${opts[@]}" --output "type=docker,name=release:${GITHUB_RUN_ID},dest=$TAR"
-          else
-            # GitHub-hosted: its own throwaway Docker; --pull, never a cached base.
-            LOCAL="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            target=() ; [ -n "$TARGET" ] && target=(--target "$TARGET")
-            docker build --pull -f "$DOCKERFILE" "${target[@]}" --build-arg GIT_SHA="$GITHUB_SHA" \
-              --label "org.opencontainers.image.created=$created" --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-              --label "org.opencontainers.image.source=$source" -t "$LOCAL" "$CONTEXT"
-            docker save "$LOCAL" -o "$TAR"; docker image rm -f "$LOCAL" >/dev/null
-          fi
+          # Rootless BuildKit, started in-process by buildctl-daemonless.sh: no long-running daemon, no root,
+          # a fresh state directory per job (so no cache from other jobs) and image-resolve-mode=pull, so
+          # base images are always resolved from the registry.
+          # --oci-worker-no-process-sandbox: the pod has no PID namespace of its own for the build steps.
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-run" XDG_DATA_HOME="$RUNNER_TEMP/buildkit-state"
+          export BUILDKITD_FLAGS="--oci-worker-no-process-sandbox"
+          mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" && chmod 700 "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME"
+          opts=(--opt "filename=$(basename "$DOCKERFILE")" --opt "build-arg:GIT_SHA=$GITHUB_SHA"
+                --opt "label:org.opencontainers.image.created=$created"
+                --opt "label:org.opencontainers.image.revision=$GITHUB_SHA"
+                --opt "label:org.opencontainers.image.source=$source" --opt image-resolve-mode=pull)
+          [ -n "$TARGET" ] && opts+=(--opt "target=$TARGET")
+          # GitHub-hosted only: the toolbox container needs the unconfined seccomp/AppArmor profiles that
+          # rootless BuildKit asks for (user namespaces, mount). Still no --privileged, still no root.
+          export TB_RUN_OPTS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined"
+          tb buildctl-daemonless.sh build --frontend dockerfile.v0 \
+            --local "context=$CONTEXT" --local "dockerfile=$(dirname "$DOCKERFILE")" \
+            "${opts[@]}" --output "type=oci,dest=$TAR"
           ls -la "$TAR"
 
       # Gate: fixable HIGH/CRITICAL vulnerabilities and any embedded secret.
@@ -215,7 +225,7 @@ jobs:
       - name: SBOM (CycloneDX)
         run: |
           mkdir -p "$RUNNER_TEMP/attest"
-          tb syft "docker-archive:$TAR" -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
+          tb syft "oci-archive:$TAR" -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
           # OS packages: drop Syft's guessed CPEs. Distros backport fixes without changing the
           # upstream version, so NVD matching on cpe:...:openssl:3.5.7 reports CVEs Debian already
           # fixed. Without a CPE, Dependency-Track judges them by purl against OSV (Debian/Alpine
@@ -226,23 +236,32 @@ jobs:
           mv "$RUNNER_TEMP/attest/sbom.tmp" "$RUNNER_TEMP/attest/sbom.cdx.json"
           jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "$RUNNER_TEMP/attest/sbom.cdx.json" > /dev/null
 
-      # crane pushes the very file Trivy and Syft read — the pushed bytes are the scanned bytes.
+      # crane pushes the very image Trivy and Syft read: the OCI tar is unpacked (no re-build, no re-tag)
+      # and pushed as an OCI layout; crane cannot push an OCI-layout *tar* directly, only a directory.
+      # Guard: BuildKit must have produced exactly one image manifest (no attestation index), and the digest
+      # the registry ends up with must be that manifest's digest, i.e. what was scanned.
       - id: push
         name: Push to GHCR
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          layout="$RUNNER_TEMP/image-layout"; mkdir -p "$layout"
+          tar -xf "$TAR" -C "$layout"
+          scanned="$(jq -er 'select(.manifests | length == 1) | .manifests[0].digest' "$layout/index.json")" \
+            || { echo "::error::expected exactly one manifest in the OCI index"; exit 1; }
+          [[ "$scanned" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::odd manifest digest ($scanned)"; exit 1; }
           echo "$TOKEN" | tb crane auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
           ref=""
-          # GHCR occasionally answers "unknown blob" mid-push; the tar is unchanged, so retry.
+          # GHCR occasionally answers "unknown blob" mid-push; the layout is unchanged, so retry.
           for attempt in 1 2 3; do
-            ref="$(tb crane push "$TAR" "${IMAGE}:sha-${GITHUB_SHA}")" && break
+            ref="$(tb crane push "$layout" "${IMAGE}:sha-${GITHUB_SHA}")" && break
             [ "$attempt" -lt 3 ] || { echo "::error::push failed 3 times"; exit 1; }
             sleep $(( attempt * 15 ))
           done
           digest="${ref##*@}"
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::could not resolve the pushed digest ($ref)"; exit 1; }
+          [ "$digest" = "$scanned" ] || { echo "::error::pushed digest $digest differs from the scanned image $scanned"; exit 1; }
           tb crane tag "${IMAGE}@${digest}" latest
           rm -rf "$DOCKER_CONFIG"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
@@ -286,7 +305,7 @@ jobs:
 
       - name: Clean up
         if: always()
-        run: rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar"
+        run: rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar" "$RUNNER_TEMP/image-layout" "$RUNNER_TEMP/buildkit-state"
 
   sign:
     name: Sign & attest

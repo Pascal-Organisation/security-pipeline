@@ -27,6 +27,10 @@ name: ci (reusable)
 on:
   workflow_call:
     inputs:
+      private-runner:
+        description: "Deprecated, ignored (kept so that existing callers keep working): private repos always use the CI cluster (arc-ci)."
+        type: string
+        default: ""
       sast-languages:
         description: "Public repos: languages for SAST, comma-separated (e.g. python,actions). Empty skips SAST there."
         type: string
@@ -84,15 +88,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # `tb <tool> ...` runs a tool from the ci-toolbox, everywhere the same binary:
+      #   CI cluster     the runner pod IS the toolbox (ENV TOOLBOX_NATIVE=1 in toolbox/Dockerfile): run natively,
+      #                  no Docker anywhere.
+      #   GitHub-hosted  `docker run` of the digest-pinned toolbox image. Docker is only the way to start
+      #                  the image here (the host has it for free); no image is built, no registry login.
+      #                  It runs as the image's own user (runner, uid 1001, the same uid as the host's runner
+      #                  user), so files in the workspace keep their owner.
       - &toolbox
         name: Toolbox
         run: |
-          # tb <tool> ...: natively in the CI cluster (the runner is the toolbox), else from the toolbox image
           mkdir -p "$RUNNER_TEMP/tb"
           cat > "$RUNNER_TEMP/tb/tb" <<'EOF'
           #!/bin/sh
           [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
-          exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
+          exec docker run --rm -e HOME=/tmp -e GITHUB_ACTIONS \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
           EOF
           chmod 755 "$RUNNER_TEMP/tb/tb"; echo "$RUNNER_TEMP/tb" >> "$GITHUB_PATH"
