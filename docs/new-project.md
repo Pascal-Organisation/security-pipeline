@@ -70,6 +70,7 @@ jobs:
       contents: read
       actions: read
       security-events: write
+      packages: read                         # Pflicht ab v3: GitHub-hosted zieht die private ci-toolbox
     with:
       sast-languages: python,actions         # nur öffentlich wirksam
       python-paths: src                      # nur privat wirksam
@@ -78,6 +79,16 @@ jobs:
 
 Die `permissions` sind eine Obergrenze und müssen auch für übersprungene Jobs reichen. Der
 Pin mit Versions-Kommentar ist wichtig: Daran erkennt Renovate die Version.
+
+**Seit v3 (Migration von v2):** Das Paket `ci-toolbox` ist privat. Aufrufer müssen deshalb
+`packages: read` vergeben (Obergrenze für `ci.yml`; `build-container.yml` hat mit `packages: write` schon
+mehr). Ohne das fehlt dem `GITHUB_TOKEN` das Recht zum Pull, und die Jobs scheitern mit `unauthorized`.
+Zusätzlich muss **jedes öffentliche Aufrufer-Repo** (läuft GitHub-hosted) einmalig unter
+`https://github.com/orgs/Pascal-Organisation/packages/container/ci-toolbox/settings` bei **Manage Actions
+access** hinzugefügt werden, Rolle **Read** (nur in der Oberfläche möglich, nicht per API). Private Repos
+laufen im CI-Cluster, dort ist das nicht nötig (der Cluster zieht mit dem Pull-Secret `ghcr-pull`).
+Das Login passiert nur auf GitHub-hosted Runnern, in einem Wegwerf-`DOCKER_CONFIG`, das direkt nach dem
+Pull gelöscht wird.
 
 Die Trivy-Prüfung sieht Abhängigkeiten **nur über Lockfiles oder Requirements-Dateien**. Ohne
 eine solche Datei bleibt sie blind, auch wenn das Gate grün ist.
@@ -90,7 +101,7 @@ Am besten von der Vorlage aus der Tabelle kopieren.
 
 `release.yml` wie in `solar`: bei Push auf `main` `build-container` aufrufen. Permissions: `contents:
 read`, `actions: read`, `security-events: write`, `pull-requests: read`, `packages: write`, `id-token:
-write`. Das Gate läuft darin, es muss nicht extra aufgerufen werden. Im App-Cluster:
+write`. Öffentliche Repos brauchen zusätzlich Zugriff auf das Paket `ci-toolbox` (siehe Abschnitt 3). Das Gate läuft darin, es muss nicht extra aufgerufen werden. Im App-Cluster:
 
 - Deployment/Service/Ingress als Manifest im App-Cluster-Repo anlegen, Secrets liegen im Cluster.
 - `ClusterImagePolicy` für `ghcr.io/pascal-organisation/<repo>`: verlangt die Signatur von

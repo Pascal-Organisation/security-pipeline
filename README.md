@@ -191,6 +191,14 @@ Der Aufrufer gibt deshalb eine Obergrenze an; jeder Job hier deklariert selbst n
 was er braucht. Für `build-container.yml` heißt das: `contents: read`, `actions: read`,
 `security-events: write`, `pull-requests: read`, `packages: write`, `id-token: write`.
 
+**v2 → v3, Pflicht für Aufrufer:** Das Paket `ci-toolbox` ist privat. Aufrufer von `ci.yml` ergänzen
+`packages: read` in den `permissions` (bei `build-container.yml` reicht das vorhandene `packages: write`).
+GitHub-hosted Runner (alle öffentlichen Repos) melden sich dafür mit dem `GITHUB_TOKEN` an der GHCR an,
+ziehen die Toolbox und löschen das Login sofort (eigenes `DOCKER_CONFIG` unter `RUNNER_TEMP`). Außerdem muss
+**jedes öffentliche Aufrufer-Repo** unter *Packages → ci-toolbox → Package settings → Manage Actions
+access* mit der Rolle **Read** eingetragen sein (nur in der Oberfläche möglich). Sonst scheitert der Pull mit
+`unauthorized`. Private Repos laufen im CI-Cluster und brauchen nichts davon.
+
 Für Dependency-Track gibt der Release-Job die drei Repo-Secrets ausdrücklich weiter (nicht
 `secrets: inherit`, damit die Pipeline nur sieht, was sie braucht):
 
