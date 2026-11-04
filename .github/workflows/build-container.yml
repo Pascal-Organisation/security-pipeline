@@ -197,7 +197,9 @@ jobs:
           # base images are always resolved from the registry.
           # --oci-worker-no-process-sandbox: the pod has no PID namespace of its own for the build steps.
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-run" XDG_DATA_HOME="$RUNNER_TEMP/buildkit-state"
-          export BUILDKITD_FLAGS="--oci-worker-no-process-sandbox"
+          # --root, --otel-socket-path: inside rootlesskit buildkitd is uid 0 and would default to /var/lib/buildkit and
+          # /run/buildkit, which the runner user cannot create; both go to this job's temp dir instead.
+          export BUILDKITD_FLAGS="--oci-worker-no-process-sandbox --root $XDG_DATA_HOME/buildkit --otel-socket-path $XDG_RUNTIME_DIR/otel-grpc.sock"
           mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" && chmod 700 "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME"
           opts=(--opt "filename=$(basename "$DOCKERFILE")" --opt "build-arg:GIT_SHA=$GITHUB_SHA"
                 --opt "label:org.opencontainers.image.created=$created"
@@ -211,6 +213,10 @@ jobs:
             --local "context=$CONTEXT" --local "dockerfile=$(dirname "$DOCKERFILE")" \
             "${opts[@]}" --output "type=oci,dest=$TAR"
           ls -la "$TAR"
+          # Trivy cannot read an OCI-layout *tar* (only docker-archive tars or layout directories), Syft and crane
+          # read the directory too: unpack once, every later step reads exactly these bytes.
+          layout="$RUNNER_TEMP/image-layout"; mkdir -p "$layout"
+          tar -xf "$TAR" -C "$layout"; echo "LAYOUT=$layout" >> "$GITHUB_ENV"
 
       # Gate: fixable HIGH/CRITICAL vulnerabilities and any embedded secret.
       # Report: everything else. Exceptions live in .security/exceptions.json (see ci.yml).
@@ -232,15 +238,15 @@ jobs:
           fi
           cache=(--cache-dir "$RUNNER_TEMP/trivy-cache")
           echo "::group::Full report (not gating)"
-          tb trivy image "${cache[@]}" --input "$TAR" --scanners vuln,secret --exit-code 0 "${ignore[@]}"
+          tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --exit-code 0 "${ignore[@]}"
           echo "::endgroup::"
-          tb trivy image "${cache[@]}" --input "$TAR" --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+          tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 --skip-db-update "${ignore[@]}"
 
       - name: SBOM (CycloneDX)
         run: |
           mkdir -p "$RUNNER_TEMP/attest"
-          tb syft "oci-archive:$TAR" -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
+          tb syft "oci-dir:$LAYOUT" -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
           # OS packages: drop Syft's guessed CPEs. Distros backport fixes without changing the
           # upstream version, so NVD matching on cpe:...:openssl:3.5.7 reports CVEs Debian already
           # fixed. Without a CPE, Dependency-Track judges them by purl against OSV (Debian/Alpine
@@ -251,8 +257,8 @@ jobs:
           mv "$RUNNER_TEMP/attest/sbom.tmp" "$RUNNER_TEMP/attest/sbom.cdx.json"
           jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "$RUNNER_TEMP/attest/sbom.cdx.json" > /dev/null
 
-      # crane pushes the very image Trivy and Syft read: the OCI tar is unpacked (no re-build, no re-tag)
-      # and pushed as an OCI layout; crane cannot push an OCI-layout *tar* directly, only a directory.
+      # crane pushes the very image Trivy and Syft read: the unpacked OCI layout (no re-build, no re-tag);
+      # crane cannot push an OCI-layout *tar* directly, only a directory.
       # Guard: BuildKit must have produced exactly one image manifest (no attestation index), and the digest
       # the registry ends up with must be that manifest's digest, i.e. what was scanned.
       - id: push
@@ -261,8 +267,7 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          layout="$RUNNER_TEMP/image-layout"; mkdir -p "$layout"
-          tar -xf "$TAR" -C "$layout"
+          layout="$LAYOUT"
           scanned="$(jq -er 'select(.manifests | length == 1) | .manifests[0].digest' "$layout/index.json")" \
             || { echo "::error::expected exactly one manifest in the OCI index"; exit 1; }
           [[ "$scanned" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::odd manifest digest ($scanned)"; exit 1; }

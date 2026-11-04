@@ -124,6 +124,12 @@ Für alle, die das nachbauen – jeder davon hat Jobs scheitern lassen:
     Runner wartet. Auf GitHub-hosted Runnern `unauthorized`, wenn das Login mit dem `GITHUB_TOKEN` fehlt oder das
     Aufrufer-Repo nicht unter *Manage Actions access* (Rolle Read) steht. Das Paket bleibt privat.
 
+12. **`newuidmap` braucht Datei-Capabilities statt setuid-root.** Ein setuid-root-Helfer in einem Pod ohne
+    `CAP_DAC_OVERRIDE` kann `/proc/<pid>/uid_map` des runner-eigenen rootlesskit-Prozesses nicht öffnen
+    (`newuidmap: open of uid_map failed: Permission denied`; mit `DAC_OVERRIDE` folgt `write to uid_map failed:
+    Operation not permitted`). Die Toolbox setzt deshalb `cap_setuid+ep`/`cap_setgid+ep` und entfernt das setuid-Bit
+    (wie das BuildKit-Rootless-Image).
+
 ### Warum nicht Kata
 
 Der erste Ansatz war eine Kata-microVM pro Job (eigener Gast-Kernel, `docker:dind` darin privilegiert).

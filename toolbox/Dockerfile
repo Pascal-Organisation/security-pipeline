@@ -29,8 +29,13 @@ USER root
 # upgrade: the base image lags Ubuntu security fixes (Trivy found e.g. libbrotli1)
 RUN apt-get update \
  && apt-get -y upgrade \
- && apt-get install -y --no-install-recommends uidmap python3-venv jq git ca-certificates \
+ && apt-get install -y --no-install-recommends uidmap libcap2-bin python3-venv jq git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
+ # newuidmap/newgidmap with FILE CAPABILITIES instead of setuid root (what the upstream BuildKit rootless image
+ # does). A setuid-root helper in a pod that has dropped all capabilities (CAP_DAC_OVERRIDE) cannot open
+ # /proc/<pid>/uid_map of the runner-owned rootlesskit process: "open of uid_map failed: Permission denied".
+ && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap \
+ && setcap cap_setuid+ep /usr/bin/newuidmap && setcap cap_setgid+ep /usr/bin/newgidmap \
  # The runner bundles Node for JavaScript actions; it never uses the npm that ships with it, and that npm
  # carries known-vulnerable dependencies (tar, minimatch, glob, ...). Remove npm/npx, keep node.
  && rm -rf /home/runner/externals/node*/lib/node_modules/npm /home/runner/externals/node*/lib/node_modules/corepack \
