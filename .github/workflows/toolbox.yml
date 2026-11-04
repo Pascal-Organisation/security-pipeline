@@ -47,12 +47,18 @@ jobs:
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" toolbox
           docker save toolbox:ci -o "$RUNNER_TEMP/toolbox.tar"
 
-      # Same gate as for apps: fixable HIGH/CRITICAL and secrets fail.
+      # Gate: fixable HIGH/CRITICAL in OS packages, and any secret. Report only: the tools' own
+      # (mostly Go) dependencies — the same binaries v2 ran as separate, unscanned images; they are fixed
+      # by upgrading the tool (Renovate), not by exceptions here.
       - name: Trivy
         run: |
           mkdir -p "$RUNNER_TEMP/trivy-cache"
-          docker run --rm -v "$RUNNER_TEMP/toolbox.tar:/img.tar:ro" -v "$RUNNER_TEMP/trivy-cache:/root/.cache" "$TRIVY_IMAGE" \
-            image --input /img.tar --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          trivy() { docker run --rm -v "$RUNNER_TEMP/toolbox.tar:/img.tar:ro" -v "$RUNNER_TEMP/trivy-cache:/root/.cache" "$TRIVY_IMAGE" "$@"; }
+          echo "::group::Full report (not gating)"
+          trivy image --input /img.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0
+          echo "::endgroup::"
+          trivy image --input /img.tar --scanners vuln,secret --pkg-types os --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --skip-db-update
 
       - name: Push, SBOM, sign
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

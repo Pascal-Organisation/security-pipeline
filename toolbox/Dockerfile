@@ -34,7 +34,9 @@ RUN apt-get update \
  # The runner bundles Node for JavaScript actions; it never uses the npm that ships with it, and that npm
  # carries known-vulnerable dependencies (tar, minimatch, glob, ...). Remove npm/npx, keep node.
  && rm -rf /home/runner/externals/node*/lib/node_modules/npm /home/runner/externals/node*/lib/node_modules/corepack \
-           /home/runner/externals/node*/bin/npm /home/runner/externals/node*/bin/npx /home/runner/externals/node*/bin/corepack
+           /home/runner/externals/node*/bin/npm /home/runner/externals/node*/bin/npx /home/runner/externals/node*/bin/corepack \
+ # no Docker daemon in this design: drop the base image's docker/containerd/runc (unused, and Trivy findings)
+ && rm -rf /usr/bin/docker* /usr/bin/containerd* /usr/bin/ctr /usr/bin/runc /usr/local/lib/docker /usr/libexec/docker
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=syft /syft /usr/local/bin/syft
 COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
