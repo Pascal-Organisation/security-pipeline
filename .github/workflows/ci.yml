@@ -4,15 +4,19 @@
 ## Visibility is never taken from an input: the first job asks the API about the repository
 ## the run belongs to, and fails closed. (github.event.repository is not relied on, because
 ## it depends on the event's payload.) A public repo therefore ALWAYS runs on
-## GitHub-hosted runners, whatever the caller passes — fork PRs can never reach the
-## self-hosted runners on the Proxmox host.
+## GitHub-hosted runners — fork PRs can never reach the self-hosted CI cluster.
 ##
 ##   public  -> ubuntu-24.04, CodeQL
-##   private -> inputs.private-runner (self-hosted CI runner), Semgrep (+ Bandit for Python)
+##   private -> runner scale set "arc-ci" (Kubernetes, one fresh pod per job, user namespaces),
+##              Semgrep (+ Bandit for Python)
+##
+## v3: no Docker daemon in jobs. Every tool comes from ONE digest-pinned image, the ci-toolbox
+## (toolbox/Dockerfile). In the CI cluster the runner IS the toolbox; on GitHub-hosted runners the
+## `tb` wrapper runs the same tool from the same image. Same steps, same tool versions everywhere.
 ##
 ## Stable contract: callers depend on the inputs below and on the single check
 ## "security-gate". Jobs are named after capabilities, never tools, so replacing a tool
-## changes only this file (docs/switching-tools.md).
+## changes only this file and the toolbox (docs/switching-tools.md).
 ##
 ## Gates (fail the job): workflow lint (actionlint + zizmor >= medium), verified/unknown
 ## secrets (TruffleHog), SAST errors, fixable HIGH/CRITICAL vulnerabilities and
@@ -23,10 +27,6 @@ name: ci (reusable)
 on:
   workflow_call:
     inputs:
-      private-runner:
-        description: 'runs-on for PRIVATE repos, as JSON, e.g. ["self-hosted","ci"]. Ignored for public repos.'
-        type: string
-        default: '["self-hosted","ci"]'
       sast-languages:
         description: "Public repos: languages for SAST, comma-separated (e.g. python,actions). Empty skips SAST there."
         type: string
@@ -51,16 +51,8 @@ on:
 permissions: {}
 
 env:
-  # Renovate keeps these tag@digest pins current (see renovate/default.json).
-  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
-  PYTHON_IMAGE: python:3.13-slim-trixie@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb
-  SEMGREP_IMAGE: semgrep/semgrep:1.183.0@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0
-  TRUFFLEHOG_IMAGE: ghcr.io/trufflesecurity/trufflehog:3.99.7@sha256:0d003fc3abc4e1565eca8462b992001314de51451e96e3c44de80d116794d5d1
-  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
-  SHELLCHECK_IMAGE: koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
-  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
-  ZIZMOR_VERSION: "1.31.1"
-  BANDIT_VERSION: "1.9.4"
+  # The one image all tools come from (toolbox.yml builds and signs it). Renovate moves the pin.
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:TOOLBOX_DIGEST_PENDING
 
 jobs:
   visibility:
@@ -84,7 +76,7 @@ jobs:
   workflow-lint:
     name: Workflow lint
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -92,24 +84,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - &toolbox
+        name: Toolbox
+        run: |
+          # tb <tool> ...: natively in the CI cluster (the runner is the toolbox), else from the toolbox image
+          mkdir -p "$RUNNER_TEMP/tb"
+          cat > "$RUNNER_TEMP/tb/tb" <<'EOF'
+          #!/bin/sh
+          [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
+          exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
+          EOF
+          chmod 755 "$RUNNER_TEMP/tb/tb"; echo "$RUNNER_TEMP/tb" >> "$GITHUB_PATH"
+          [ -n "${TOOLBOX_NATIVE:-}" ] || docker pull --quiet "$TOOLBOX" >/dev/null
 
       - name: actionlint
-        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color
+        run: tb actionlint -color
 
-      # Via pip, not the zizmor OCI image: that binary needs x86-64-v2 and crashes on
-      # Proxmox's default kvm64 vCPU (see websiteghana history).
       - name: zizmor (fail on medium and above)
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" -w /repo "$PYTHON_IMAGE" sh -euc '
-            python -m venv /tmp/v
-            /tmp/v/bin/pip install -q "zizmor==$0"
-            /tmp/v/bin/zizmor --offline --min-severity medium .github/workflows/
-          ' "$ZIZMOR_VERSION"
+        run: tb zizmor --offline --min-severity medium .github/workflows/
 
   secrets:
     name: Secrets
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -118,12 +116,9 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-
+      - *toolbox
       # PR: the PR's commits. Push: the pushed commits. schedule/dispatch: full history.
-      # verified = key still works; unknown = could not be checked (no egress to the
-      # provider from the runner, provider down, ...). Both block.
-      # Run as a digest-pinned image, not the trufflehog action: the action pulls
-      # `trufflehog:latest` unless told otherwise. --no-update: no self-update at runtime.
+      # verified = key still works; unknown = could not be checked. Both block.
       - name: TruffleHog (block on verified + unknown)
         env:
           EVENT: ${{ github.event_name }}
@@ -140,8 +135,7 @@ jobs:
           fi
           for v in "${range[@]}"; do [[ "$v" =~ ^(--since-commit|--branch|[0-9a-f]{40})$ ]] || { echo "::error::unexpected ref '$v'"; exit 1; }; done
           echo "scope: ${range[*]:-full history}"
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" -w /repo "$TRUFFLEHOG_IMAGE" \
-            git file:///repo --results=verified,unknown --fail --no-update --github-actions "${range[@]}"
+          tb trufflehog git "file://$GITHUB_WORKSPACE" --results=verified,unknown --fail --no-update --github-actions "${range[@]}"
 
   sast-public:
     name: SAST (public)
@@ -172,7 +166,7 @@ jobs:
     name: SAST (private)
     needs: visibility
     if: ${{ needs.visibility.outputs.private == 'true' }}
-    runs-on: ${{ fromJSON(inputs.private-runner) }}
+    runs-on: arc-ci
     timeout-minutes: 20
     permissions:
       contents: read
@@ -180,16 +174,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+      - *toolbox
       # ERROR findings block, WARNING/INFO are listed in the job summary only.
-      # The CI runner needs egress to semgrep.dev for the p/default rule pack.
       - name: Semgrep (block on ERROR)
         run: |
           out="$RUNNER_TEMP/semgrep" && mkdir -p "$out"
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-            -v "$PWD:/src:ro" -v "$out:/out" -w /src "$SEMGREP_IMAGE" \
-            semgrep scan --config p/default --metrics=off --quiet \
-              --json-output=/out/semgrep.json --sarif-output=/out/semgrep.sarif
+          tb semgrep scan --config p/default --metrics=off --quiet \
+            --json-output="$out/semgrep.json" --sarif-output="$out/semgrep.sarif"
           {
             echo "### Semgrep"
             jq -r '.results[] | "- **\(.extra.severity)** `\(.check_id)` \(.path):\(.start.line)"' "$out/semgrep.json"
@@ -210,7 +201,7 @@ jobs:
     name: SAST (Python)
     needs: visibility
     if: ${{ needs.visibility.outputs.private == 'true' && inputs.python-paths != '' }}
-    runs-on: ${{ fromJSON(inputs.private-runner) }}
+    runs-on: arc-ci
     timeout-minutes: 10
     permissions:
       contents: read
@@ -218,25 +209,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+      - *toolbox
       # High severity with at least medium confidence blocks; the full list is printed.
       - name: Bandit
         env:
           PATHS: ${{ inputs.python-paths }}
         run: |
           case "$PATHS" in *[!A-Za-z0-9_./\ -]*) echo "::error::python-paths has unexpected characters"; exit 1;; esac
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e PATHS="$PATHS" \
-            -v "$PWD:/src:ro" -w /src "$PYTHON_IMAGE" sh -euc '
-              python -m venv /tmp/v
-              /tmp/v/bin/pip install -q "bandit==$0"
-              /tmp/v/bin/bandit -q -r $PATHS --exit-zero
-              /tmp/v/bin/bandit -q -r $PATHS --severity-level high --confidence-level medium
-            ' "$BANDIT_VERSION"
+          # shellcheck disable=SC2086 # PATHS is a validated, space-separated list
+          tb bandit -q -r $PATHS --exit-zero
+          # shellcheck disable=SC2086
+          tb bandit -q -r $PATHS --severity-level high --confidence-level medium
 
   dependencies:
     name: Dependencies & IaC
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -244,7 +232,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+      - *toolbox
       # Accepted findings go into the repo's .security/exceptions.json, each with a reason
       # and an expiry date — an exception that is never revisited stops being one.
       - name: Trivy fs (gate + report)
@@ -255,7 +243,7 @@ jobs:
           skip=() ; [ -n "$SKIP_DIRS" ] && skip=(--skip-dirs "$SKIP_DIRS")
           # Tool-neutral exceptions (.security/exceptions.json, see docs/switching-tools.md),
           # translated here so that replacing the scanner never touches a repo.
-          ignore=() ; mounts=()
+          ignore=()
           if [ -f .security/exceptions.json ]; then
             jq -e 'all(.exceptions[];
                 (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
@@ -267,27 +255,21 @@ jobs:
                 (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
                 (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
               .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
-            ignore=(--ignorefile /scanner-ignore.yaml)
-            mounts=(-v "$RUNNER_TEMP/scanner-ignore.yaml:/scanner-ignore.yaml:ro")
+            ignore=(--ignorefile "$RUNNER_TEMP/scanner-ignore.yaml")
           fi
-          # Cache per run: a named volume on a shared Docker daemon would outlive the job
-          # and could be poisoned by another repo's job.
-          mkdir -p "$RUNNER_TEMP/trivy-cache"
-          trivy() { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
-            -v "$PWD:/src:ro" -w /src -v "$RUNNER_TEMP/trivy-cache:/cache" "${mounts[@]}" "$TRIVY_IMAGE" "$@"; }
-
+          # Cache per run: never shared between jobs.
+          cache=(--cache-dir "$RUNNER_TEMP/trivy-cache")
           echo "::group::Full report (not gating)"
-          trivy fs --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" .
+          tb trivy fs "${cache[@]}" --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" .
           echo "::endgroup::"
-
-          trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed \
+          tb trivy fs "${cache[@]}" --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 --skip-db-update "${skip[@]}" "${ignore[@]}" .
 
   dockerfile:
     name: Dockerfile lint
     needs: visibility
     if: ${{ inputs.dockerfile != '' }}
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -295,20 +277,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+      - *toolbox
       - name: hadolint (fail on error)
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
           case "$DOCKERFILE" in *..*|/*|*[!A-Za-z0-9_./-]*) echo "::error::dockerfile path not allowed"; exit 1;; esac
-          docker run --rm -v "$PWD:/src:ro" -w /src "$HADOLINT_IMAGE" hadolint --failure-threshold error "$DOCKERFILE"
+          tb hadolint --failure-threshold error "$DOCKERFILE"
 
   # Trial (report-only, not in security-gate's needs): a red check, even with
   # continue-on-error, would hold back Renovate's automerge. See docs/switching-tools.md.
   shell-lint:
     name: Shell lint (trial)
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -316,14 +298,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+      - *toolbox
       - name: shellcheck (report only)
         run: |
           mapfile -t files < <(git ls-files '*.sh')
           [ "${#files[@]}" -gt 0 ] || { echo "no shell scripts"; exit 0; }
           status=0
-          docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" --severity=warning --format=gcc "${files[@]}" \
-            > "$RUNNER_TEMP/shellcheck.txt" || status=$?
+          tb shellcheck --severity=warning --format=gcc "${files[@]}" > "$RUNNER_TEMP/shellcheck.txt" || status=$?
           cat "$RUNNER_TEMP/shellcheck.txt"
           {
             echo "### Shell lint (trial)"
@@ -335,7 +316,7 @@ jobs:
   runtime-images:
     name: Runtime images (trial)
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -343,7 +324,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+      - *toolbox
       - name: Scan images named in compose files (report only)
         run: |
           mapfile -t composes < <(git ls-files '*compose*.yml' '*compose*.yaml')
@@ -351,11 +332,10 @@ jobs:
           # Images set through ${VAR} are this repo's own releases: build-container scans those.
           mapfile -t images < <(sed -nE "s/^[[:space:]]*image:[[:space:]]*['\"]?([^'\"#[:space:]\$]+)['\"]?[[:space:]]*(#.*)?$/\1/p" "${composes[@]}" | sort -u)
           echo "### Runtime images (trial)" >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p "$RUNNER_TEMP/trivy-cache"
           for image in "${images[@]}"; do
             [[ "$image" =~ ^[A-Za-z0-9._/:@-]+$ ]] || { echo "skipping odd image name"; continue; }
-            count="$(docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
-              -v "$RUNNER_TEMP/trivy-cache:/cache" "$TRIVY_IMAGE" image --quiet --scanners vuln \
+            # trivy pulls the image itself (no daemon)
+            count="$(tb trivy image --cache-dir "$RUNNER_TEMP/trivy-cache" --quiet --scanners vuln \
               --severity HIGH,CRITICAL --ignore-unfixed --format json "$image" \
               | jq '[.Results[]?.Vulnerabilities[]?] | length')" || count="scan failed"
             echo "- \`${image%%@*}\`: ${count} fixable HIGH/CRITICAL" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -367,7 +347,7 @@ jobs:
     name: security-gate
     if: ${{ always() }}
     needs: [visibility, workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile]
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:

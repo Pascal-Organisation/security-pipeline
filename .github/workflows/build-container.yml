@@ -2,7 +2,8 @@
 ##
 ##   policy : the commit is on main, GitHub-verified, and the merge result of a PR
 ##   gate   : ci.yml, the same security-gate as on pull requests
-##   build  : docker build -> Trivy image gate -> Syft SBOM (CycloneDX) -> push to GHCR
+##   build  : image tar (BuildKit in the CI cluster, docker on GitHub-hosted) -> Trivy image gate on the
+##            tar -> Syft SBOM (CycloneDX) from the tar -> crane pushes THAT tar to GHCR
 ##            -> SLSA v1 provenance predicate for the pushed digest
 ##   sign   : keyless Cosign (GitHub OIDC -> Fulcio, logged in Rekor), on a GitHub-hosted runner
 ##
@@ -14,8 +15,10 @@
 ## Cost, accepted: Rekor is public, so repo and workflow names of private repos appear there.
 ## No code does.
 ##
-## The image that is pushed is byte-for-byte the tar Trivy scanned — tag and push, never a
-## rebuild. The signing job runs no third-party scanner and no repo code.
+## The image that is pushed is byte-for-byte the tar Trivy scanned: crane pushes the scanned file,
+## no daemon in between (v3). The signing job runs no third-party scanner and no repo code.
+## Private repos build in the CI cluster (scale set "arc-ci": fresh pod per job, user namespaces,
+## BuildKit as a sidecar); public repos on GitHub-hosted runners. Tools: the ci-toolbox (see ci.yml).
 ##
 ## Outputs image + digest.
 name: build-container (reusable)
@@ -23,10 +26,6 @@ name: build-container (reusable)
 on:
   workflow_call:
     inputs:
-      private-runner:
-        description: 'runs-on for PRIVATE repos, as JSON. Ignored for public repos.'
-        type: string
-        default: '["self-hosted","ci"]'
       context:
         type: string
         default: "."
@@ -74,9 +73,9 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v2.3.0
-  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
-  SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
+  PIPELINE_VERSION: v3.0.0
+  # same pin as in ci.yml (Renovate moves both)
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:TOOLBOX_DIGEST_PENDING
 
 jobs:
   # A direct push still lands in git on GitHub Free; it just never gets signed.
@@ -109,7 +108,6 @@ jobs:
       actions: read # CodeQL needs workflow run metadata
       security-events: write # upload CodeQL results
     with:
-      private-runner: ${{ inputs.private-runner }}
       sast-languages: ${{ inputs.sast-languages }}
       python-paths: ${{ inputs.python-paths }}
       dockerfile: ${{ inputs.dockerfile }}
@@ -118,7 +116,7 @@ jobs:
   build:
     name: Build, scan, SBOM, push
     needs: gate
-    runs-on: ${{ needs.gate.outputs.private == 'true' && fromJSON(inputs.private-runner) || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.gate.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -132,11 +130,24 @@ jobs:
           persist-credentials: false
           submodules: ${{ inputs.submodules }}
 
-      # Isolated docker config: the registry login never lands in the runner user's ~/.docker.
-      - name: Isolate docker config
+      # Registry login only in this job's temp dir, never in a home directory.
+      - name: Isolate registry config
         run: |
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+
+      - name: Toolbox
+        run: |
+          # tb <tool> ...: natively in the CI cluster (the runner is the toolbox), else from the toolbox image
+          mkdir -p "$RUNNER_TEMP/tb"
+          cat > "$RUNNER_TEMP/tb/tb" <<'EOF'
+          #!/bin/sh
+          [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
+          exec docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
+          EOF
+          chmod 755 "$RUNNER_TEMP/tb/tb"; echo "$RUNNER_TEMP/tb" >> "$GITHUB_PATH"
+          [ -n "${TOOLBOX_NATIVE:-}" ] || docker pull --quiet "$TOOLBOX" >/dev/null
 
       - name: Build
         env:
@@ -150,28 +161,37 @@ jobs:
           for v in "$CONTEXT" "$DOCKERFILE" "$TARGET"; do
             case "$v" in *..*|/*|*[!A-Za-z0-9_./-]*) echo "::error::input '$v' not allowed"; exit 1;; esac
           done
-          LOCAL="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "LOCAL=$LOCAL" >> "$GITHUB_ENV"
-          echo "TAR=$RUNNER_TEMP/image.tar" >> "$GITHUB_ENV"
-          target=() ; [ -n "$TARGET" ] && target=(--target "$TARGET")
-          # org.opencontainers.image.created is load-bearing: host deployers refuse any
+          TAR="$RUNNER_TEMP/image.tar"; echo "TAR=$TAR" >> "$GITHUB_ENV"
+          # org.opencontainers.image.created is load-bearing: the updater in the app cluster refuses any
           # image not built strictly later than the one running (replay protection).
-          # --pull: never build on a base image another job left in the shared daemon.
-          docker build --pull -f "$DOCKERFILE" "${target[@]}" \
-            --build-arg GIT_SHA="$GITHUB_SHA" \
-            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            -t "$LOCAL" "$CONTEXT"
-          docker save "$LOCAL" -o "$RUNNER_TEMP/image.tar"
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          source="https://github.com/$GITHUB_REPOSITORY"
+          if [ -n "${TOOLBOX_NATIVE:-}" ]; then
+            # CI cluster: BuildKit sidecar (BUILDKIT_HOST), fresh per job, so no cache from other jobs;
+            # base images are always resolved from the registry.
+            opts=(--opt "filename=$(basename "$DOCKERFILE")" --opt "build-arg:GIT_SHA=$GITHUB_SHA"
+                  --opt "label:org.opencontainers.image.created=$created"
+                  --opt "label:org.opencontainers.image.revision=$GITHUB_SHA"
+                  --opt "label:org.opencontainers.image.source=$source" --opt image-resolve-mode=pull)
+            [ -n "$TARGET" ] && opts+=(--opt "target=$TARGET")
+            buildctl build --frontend dockerfile.v0 --local "context=$CONTEXT" --local "dockerfile=$(dirname "$DOCKERFILE")" \
+              "${opts[@]}" --output "type=docker,name=release:${GITHUB_RUN_ID},dest=$TAR"
+          else
+            # GitHub-hosted: its own throwaway Docker; --pull, never a cached base.
+            LOCAL="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            target=() ; [ -n "$TARGET" ] && target=(--target "$TARGET")
+            docker build --pull -f "$DOCKERFILE" "${target[@]}" --build-arg GIT_SHA="$GITHUB_SHA" \
+              --label "org.opencontainers.image.created=$created" --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --label "org.opencontainers.image.source=$source" -t "$LOCAL" "$CONTEXT"
+            docker save "$LOCAL" -o "$TAR"; docker image rm -f "$LOCAL" >/dev/null
+          fi
+          ls -la "$TAR"
 
       # Gate: fixable HIGH/CRITICAL vulnerabilities and any embedded secret.
       # Report: everything else. Exceptions live in .security/exceptions.json (see ci.yml).
       - name: Trivy image (gate + report)
         run: |
-          # Tool-neutral exceptions (.security/exceptions.json, see docs/switching-tools.md),
-          # translated here so that replacing the scanner never touches a repo.
-          ignore=() ; mounts=()
+          ignore=()
           if [ -f .security/exceptions.json ]; then
             jq -e 'all(.exceptions[];
                 (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
@@ -183,24 +203,19 @@ jobs:
                 (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
                 (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
               .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
-            ignore=(--ignorefile /scanner-ignore.yaml)
-            mounts=(-v "$RUNNER_TEMP/scanner-ignore.yaml:/scanner-ignore.yaml:ro")
+            ignore=(--ignorefile "$RUNNER_TEMP/scanner-ignore.yaml")
           fi
-          # Cache per run (see ci.yml), container as the runner user.
-          mkdir -p "$RUNNER_TEMP/trivy-cache"
-          trivy() { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TRIVY_CACHE_DIR=/cache \
-            -v "$TAR:/img.tar:ro" -v "$RUNNER_TEMP/trivy-cache:/cache" "${mounts[@]}" "$TRIVY_IMAGE" "$@"; }
+          cache=(--cache-dir "$RUNNER_TEMP/trivy-cache")
           echo "::group::Full report (not gating)"
-          trivy image --input /img.tar --scanners vuln,secret --exit-code 0 "${ignore[@]}"
+          tb trivy image "${cache[@]}" --input "$TAR" --scanners vuln,secret --exit-code 0 "${ignore[@]}"
           echo "::endgroup::"
-          trivy image --input /img.tar --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+          tb trivy image "${cache[@]}" --input "$TAR" --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 --skip-db-update "${ignore[@]}"
 
       - name: SBOM (CycloneDX)
         run: |
           mkdir -p "$RUNNER_TEMP/attest"
-          docker run --rm -v "$TAR:/img.tar:ro" "$SYFT_IMAGE" \
-            docker-archive:/img.tar -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
+          tb syft "docker-archive:$TAR" -o cyclonedx-json > "$RUNNER_TEMP/attest/sbom.cdx.json"
           # OS packages: drop Syft's guessed CPEs. Distros backport fixes without changing the
           # upstream version, so NVD matching on cpe:...:openssl:3.5.7 reports CVEs Debian already
           # fixed. Without a CPE, Dependency-Track judges them by purl against OSV (Debian/Alpine
@@ -211,26 +226,25 @@ jobs:
           mv "$RUNNER_TEMP/attest/sbom.tmp" "$RUNNER_TEMP/attest/sbom.cdx.json"
           jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "$RUNNER_TEMP/attest/sbom.cdx.json" > /dev/null
 
+      # crane pushes the very file Trivy and Syft read — the pushed bytes are the scanned bytes.
       - id: push
         name: Push to GHCR
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          for tag in latest "sha-${GITHUB_SHA}"; do
-            docker tag "$LOCAL" "${IMAGE}:${tag}"
-            # GHCR occasionally answers "unknown blob" mid-push; the tar is unchanged, so retry.
-            for attempt in 1 2 3; do
-              docker push --quiet "${IMAGE}:${tag}" && break
-              [ "$attempt" -lt 3 ] || { echo "::error::push of ${tag} failed 3 times"; exit 1; }
-              sleep $(( attempt * 15 ))
-            done
+          echo "$TOKEN" | tb crane auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          ref=""
+          # GHCR occasionally answers "unknown blob" mid-push; the tar is unchanged, so retry.
+          for attempt in 1 2 3; do
+            ref="$(tb crane push "$TAR" "${IMAGE}:sha-${GITHUB_SHA}")" && break
+            [ "$attempt" -lt 3 ] || { echo "::error::push failed 3 times"; exit 1; }
+            sleep $(( attempt * 15 ))
           done
-          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${IMAGE}:latest" \
-            | grep "^${IMAGE}@" | head -1 | cut -d@ -f2)"
-          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::could not resolve the pushed digest"; exit 1; }
-          docker logout ghcr.io
+          digest="${ref##*@}"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::could not resolve the pushed digest ($ref)"; exit 1; }
+          tb crane tag "${IMAGE}@${digest}" latest
+          rm -rf "$DOCKER_CONFIG"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "DIGEST=$digest" >> "$GITHUB_ENV"
@@ -272,9 +286,7 @@ jobs:
 
       - name: Clean up
         if: always()
-        run: |
-          rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar"
-          docker image rm -f "$LOCAL" >/dev/null 2>&1 || true
+        run: rm -rf "$DOCKER_CONFIG" "$RUNNER_TEMP/image.tar"
 
   sign:
     name: Sign & attest
