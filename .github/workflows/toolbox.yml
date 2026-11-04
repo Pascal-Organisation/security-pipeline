@@ -1,0 +1,77 @@
+## ci-toolbox: build, scan, SBOM, push, keyless sign — GitHub-hosted only.
+##
+## The toolbox is the runner image of the self-hosted CI cluster and the job container on GitHub-hosted
+## runners (see toolbox/Dockerfile). Pull requests only build and scan; main pushes and signs.
+## Consumers pin it by digest; the signature identity is this workflow on refs/heads/main.
+name: ci-toolbox
+
+on:
+  pull_request:
+    paths: [toolbox/**, .github/workflows/toolbox.yml]
+  push:
+    branches: [main]
+    paths: [toolbox/**, .github/workflows/toolbox.yml]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: toolbox-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/pascal-organisation/ci-toolbox
+  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  SYFT_IMAGE: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
+
+jobs:
+  build:
+    name: Build, scan, sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write # push the toolbox image + signature
+      id-token: write # keyless signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Build
+        run: |
+          docker build --pull -t toolbox:ci \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" toolbox
+          docker save toolbox:ci -o "$RUNNER_TEMP/toolbox.tar"
+
+      # Gate: fixable HIGH/CRITICAL in OS packages, and any secret. Report only: the tools' own
+      # (mostly Go) dependencies — the same binaries v2 ran as separate, unscanned images; they are fixed
+      # by upgrading the tool (Renovate), not by exceptions here.
+      - name: Trivy
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          trivy() { docker run --rm -v "$RUNNER_TEMP/toolbox.tar:/img.tar:ro" -v "$RUNNER_TEMP/trivy-cache:/root/.cache" "$TRIVY_IMAGE" "$@"; }
+          echo "::group::Full report (not gating)"
+          trivy image --input /img.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0
+          echo "::endgroup::"
+          trivy image --input /img.tar --scanners vuln,secret --pkg-types os --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --skip-db-update
+
+      - name: Push, SBOM, sign
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag toolbox:ci "$IMAGE:sha-$GITHUB_SHA"; docker tag toolbox:ci "$IMAGE:latest"
+          docker push --quiet "$IMAGE:sha-$GITHUB_SHA"; docker push --quiet "$IMAGE:latest"
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:latest" | grep "^$IMAGE@" | head -1 | cut -d@ -f2)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::no digest"; exit 1; }
+          docker run --rm -v "$RUNNER_TEMP/toolbox.tar:/img.tar:ro" "$SYFT_IMAGE" docker-archive:/img.tar -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
+          cosign sign --yes "$IMAGE@$digest"
+          cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/sbom.cdx.json" "$IMAGE@$digest"
+          docker logout ghcr.io
+          echo "### ci-toolbox: \`$IMAGE@$digest\`" >> "$GITHUB_STEP_SUMMARY"
