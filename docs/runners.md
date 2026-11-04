@@ -1,18 +1,20 @@
 # Self-hosted Runner
 
-Private Repos der Organisation bauen auf eigener Hardware (Proxmox). Öffentliche Repos nutzen diese
-Runner nie (siehe unten). Dieses Dokument beschreibt, wie die Runner voneinander getrennt sind, was
-mit Kubernetes versucht wurde und warum das (noch) nicht produktiv läuft.
+Private Repos der Organisation bauen auf eigener Hardware (Proxmox), in einem Kubernetes-Cluster mit
+einem frischen Pod pro Job. Öffentliche Repos nutzen diese Runner nie (siehe unten). Dieses Dokument
+beschreibt, wie ein Job vom Knoten und von anderen Jobs getrennt ist, was früher galt und was bei
+einem Nachbau schiefgeht.
 
 ## Stand
 
 | Was | Wie | Status |
 |---|---|---|
-| **Eine Runner-VM pro Vertrauensbereich** | jedes Repo, das etwas ausliefert (Image, Website), hat eine eigene VM mit eigenem Docker-Daemon; die reinen CI-Repos teilen sich eine weitere | **produktiv** |
-| ARC auf k3s, **eine Kata-microVM pro Job** | [Actions Runner Controller](https://github.com/actions/actions-runner-controller) + [Kata Containers](https://katacontainers.io/); jeder Job in einer frischen microVM, danach gelöscht | gebaut, **nur als Versuch** (Label `arc-trial`) |
+| **CI-Cluster**: ARC auf k3s, **ein Pod pro Job** in eigenem User-Namespace | [Actions Runner Controller](https://github.com/actions/actions-runner-controller); Pod = `ci-toolbox`-Image, kein Docker-Daemon, Images baut rootless BuildKit im Pod; danach wird der Pod gelöscht | v3, Scale Set `arc-ci` |
+| Eine Runner-VM pro Vertrauensbereich | je Repo eine VM mit eigenem rootful Docker-Daemon (Label `ci` bzw. Repo-Runner) | **abgelöst** (v2) |
+| ARC mit **Kata-microVM** pro Job | gebaut, lief verschachtelt auf kleiner Hardware nicht stabil | **verworfen** (Label `arc-trial`) |
 
-Konfiguration des Kubernetes-Aufbaus als Beispiel in [`runners/arc/`](../runners/arc/) – ohne
-Geheimnisse und ohne Interna des Homelabs.
+Konfiguration des Clusters als Beispiel in [`runners/arc/`](../runners/arc/) – ohne Geheimnisse und
+ohne Interna des Homelabs.
 
 ## Warum überhaupt
 
@@ -25,94 +27,119 @@ beliebigen privaten Repos – etwa über eine kompromittierte Abhängigkeit in e
 - die Registrierungsdaten der anderen Runner lesen und deren Jobs (samt `GITHUB_TOKEN` mit
   `packages: write`) abgreifen können.
 
-## Produktiv: eine VM pro Vertrauensbereich
+v2 trennte das mit einer VM pro Vertrauensbereich. v3 geht weiter: Ein Job bekommt weder Docker-Daemon
+noch Docker-Socket, und nichts überlebt ihn.
 
-- Jedes ausliefernde Repo hat seinen **eigenen** Runner auf einer **eigenen** VM (Repo-Runner, nicht
-  Org-Runner). Ein Job von Repo A erreicht weder Daemon, Images, Arbeitsverzeichnis noch
-  Registrierung von Repo B.
-- Die Repos ohne Auslieferung (nur CI) teilen sich einen Org-Runner auf einer weiteren VM.
-- Jede VM: Proxmox-Firewall default deny, eingehend nur SSH vom Hypervisor, ausgehend nur DNS
-  (Router), 80/443, NTP – kein LAN.
-- Gleiche Runner-Namen und Labels wie zuvor; kein Caller musste sich ändern.
-
-**Offen benannt:** Innerhalb eines Repos bleibt der Runner persistent. Ein PR-Job kann also Reste für
-den nächsten Release **desselben** Repos hinterlassen. In der Praxis öffnen nur der Owner und Renovate
-PRs, und eine bösartige Abhängigkeit, die Renovate mergt, würde ohnehin ausgeliefert. Die VMs lassen
-sich per Skript in Minuten neu aufsetzen, wenn man diesen Rest begrenzen will.
-
-## Versuch: ARC auf k3s, eine Kata-microVM pro Job
-
-Das Ziel: nichts überlebt einen Job, und die Trennung hängt nicht mehr davon ab, welches Repo
-welchen Runner bekommt.
+## v3: ein Pod pro Job, User-Namespace, rootless BuildKit
 
 ```
 GitHub ◄──── nur ausgehend (443) ────────────────────────────────────┐
                                                                      │
 k3s-Knoten (VM, Proxmox-Firewall: default deny, kein LAN)            │
 ├─ arc-systems/  Controller + Listener  ── GitHub-App-Token ─────────┘
-└─ arc-runners/  ein Pod pro Job, runtimeClass kata-qemu
-     └─ Kata-microVM (eigener Kernel, 2 vCPU / 3,5 GB)
-          ├─ runner   actions-runner, Docker-Client, kein Service-Account-Token
-          └─ dind     docker:dind, privileged – aber nur in dieser microVM
-                └─ /var/lib/docker = ext4 auf Loop-Device mit Direct-I/O
+└─ arc-runners/  ein Pod pro Job, runc, hostUsers: false
+     └─ runner = ci-toolbox (digest-gepinnt, cosign-signiert)
+          ├─ alle Werkzeuge nativ (actionlint, zizmor, Trivy, Semgrep, …)
+          └─ rootless BuildKit (buildctl-daemonless) → OCI-Tar → crane push
 ```
+
+- **Ein Image für alles.** Das `ci-toolbox` (`toolbox/Dockerfile`, gebaut und signiert von `toolbox.yml`)
+  enthält Runner und alle Werkzeuge. Im Cluster *ist* der Pod die Toolbox (`TOOLBOX_NATIVE=1`), auf
+  GitHub-hosted Runnern startet der Wrapper `tb` dasselbe Image mit `docker run`. Gleiche Schritte,
+  gleiche Versionen.
+- **User-Namespace statt microVM.** `hostUsers: false`: Jeder Pod bekommt einen eigenen Linux-User-
+  Namespace; „root" im Pod ist auf dem Knoten ein unprivilegierter, nicht abgebildeter User. Der Pod ist
+  nicht privileged und hat nur die Capabilities `SETUID`/`SETGID` (für `newuidmap`/`newgidmap`).
+- **Kein Docker.** Images baut rootless BuildKit im Pod (`--output type=oci`); gepusht wird das
+  *gescannte* Tar mit `crane`. Es gibt keinen Daemon, den ein Job austauschen könnte.
 
 | Angriff aus einem Job | Ergebnis |
 |---|---|
-| Container-Ausbruch aus Scanner oder Build | landet im `dind`-Container – in derselben microVM |
-| root im privilegierten `dind` | root in der microVM; deren Kernel ist nicht der des Knotens |
-| Spuren für spätere Jobs | Pod, microVM und Docker-Disk werden nach dem Job gelöscht |
+| Container-Ausbruch aus Scanner oder Build | landet im Pod, im eigenen User-Namespace, ohne Rechte auf dem Knoten |
+| root im Pod | auf dem Knoten ein unprivilegierter, unmappter User |
+| Spuren für spätere Jobs | Pod und alle Volumes (`emptyDir`) werden nach dem Job gelöscht; Base-Images immer frisch aus der Registry |
 | Kubernetes-API | Runner-Pods ohne Service-Account-Token, Service-Account ohne Rechte |
-| Ins LAN | Firewall am Knoten wie oben |
+| Ins LAN | Firewall am Knoten: nur DNS, 80/443, NTP |
 
 Zugang zu GitHub: eine eigene, private GitHub App mit **genau einer** Berechtigung –
 *Organization → Self-hosted runners: Read and write*. Keine Repo-Rechte, keine Webhooks. Der Schlüssel
 liegt nur als Kubernetes-Secret auf dem Knoten (k3s mit `secrets-encryption`); Runner-Pods sehen ihn
-nie, sie bekommen nur eine Just-in-time-Registrierung für genau einen Job. Grenze: Ein Ausbruch aus
-Kata/QEMU wäre root auf dem Knoten – und mit dem App-Schlüssel ließen sich Runner registrieren, die
-Jobs privater Repos abgreifen. Der Knoten wäre damit die Vertrauensbasis für alle privaten Builds.
+nie, sie bekommen nur eine Just-in-time-Registrierung für genau einen Job.
 
-### Warum nur Versuch
+**Grenzen, offen benannt:**
+- Rootless BuildKit braucht ein gelockertes Seccomp- und AppArmor-Profil (`Unconfined`),
+  `procMount: Unmasked` und `allowPrivilegeEscalation: true`. Das ist vertretbar, weil der Pod im eigenen
+  User-Namespace ohne Capabilities im *Host*-Namespace läuft – aber es ist **schwächer als eine MicroVM**:
+  Ein Kernel-Fehler (User-Namespaces, Mounts) wäre ein Weg auf den Knoten. Der Knoten ist damit die
+  Vertrauensbasis für alle privaten Builds, und mit dem App-Schlüssel ließen sich Runner registrieren,
+  die Jobs privater Repos abgreifen.
+- Der Namespace der Runner darf kein Pod-Security-`enforce=baseline/restricted` tragen.
+- Im Build sind IDs über 64999 (z. B. 65534 `nobody`) nicht abgebildet; ein `chown` darauf scheitert.
+- Das Toolbox-Image ist selbst Teil der Lieferkette und wird mit Docker auf einem GitHub-hosted Runner
+  gebaut (es kann sich nicht selbst bauen). Das Paket `ci-toolbox` bleibt **privat**
+  (Entscheidung des Inhabers; die Sichtbarkeit wird nie geändert). Zugriff: Die Cluster-Pods ziehen es mit einem
+  schreibgeschützten `imagePullSecret` (`ghcr-pull`, nur `read:packages`); GitHub-hosted Runner melden sich mit dem
+  `GITHUB_TOKEN` (`packages: read`) an der GHCR an. Dafür muss **jedes** Aufrufer-Repo, das auf GitHub-hosted Runnern
+  läuft, unter *Packages → ci-toolbox → Package settings → Manage Actions access* mit der Rolle **Read**
+  eingetragen sein (nur in der Oberfläche möglich).
+- Der Pfad auf GitHub-hosted Runnern (`docker run` mit `seccomp`/`apparmor`/`systempaths=unconfined` für
+  BuildKit) betrifft nur öffentliche Repos und Signieren/Re-Scan; dort ist der Runner ohnehin
+  eine Wegwerf-VM von GitHub.
 
-Der Knoten ist selbst eine VM. Die Job-microVMs laufen also **verschachtelt** (nested
-virtualization) auf einem kleinen 4-Kern-Host. Leichte Jobs (Linter, Semgrep, Bandit, TruffleHog,
-Trivy auf Dateien) laufen. Unter mehr I/O – Images ziehen, `docker build`, `docker save` und Trivy auf
-das Tar, also genau das, was `build-container.yml` bei jedem Release tut – friert der Gast so lange ein,
-dass Kata den Agenten für tot erklärt (`CheckRequest timed out`, `Dead agent`) und die microVM
-abräumt; in einem Test 16-mal in 25 Minuten normaler CI.
+### Label des Scale Sets
 
-Ein Security-Gate, das zufällig scheitert, ist schlechter als ein langsameres: Releases blieben
-hängen, und Renovate merged nur bei grünen Checks. Deshalb tragen die produktiven Runner die Jobs,
-und das Scale Set hat nur das Label `arc-trial` (`runs-on: [self-hosted, arc-trial]` zum Ausprobieren).
-
-Auf einem Knoten **ohne** Verschachtelung (Bare Metal) ist das Problem nicht zu erwarten. Umstellen
-heißt dann: die echten Labels ins Scale Set, Scale Set neu anlegen, VM-Runner abmelden.
+Private Repos laufen auf dem Scale Set `arc-ci` (`runs-on` = Name des Scale Sets). `ci.yml` und
+`build-container.yml` haben dafür den Input `runner` (Standard `arc-ci`); wer ein anderes Scale Set
+ausprobiert (z. B. `k8s-ci-trial`), setzt ihn im Aufrufer. Öffentliche Repos ignorieren ihn und laufen
+immer auf GitHub-hosted Runnern.
 
 ### Stolpersteine beim Aufbau
 
 Für alle, die das nachbauen – jeder davon hat Jobs scheitern lassen:
 
-1. **overlayfs auf virtio-fs geht nicht.** Kata reicht `emptyDir`-Volumes per virtio-fs in die
-   microVM; Docker kann darauf keine Layer stapeln (`invalid argument`). Lösung: sparse Datei, als
-   ext4 formatiert, per Loop-Device nach `/var/lib/docker`.
-2. **Loop-Device nur mit Direct-I/O.** Gepuffert liegt jeder Schreibzugriff in zwei Page-Caches
-   des Gasts (ext4 und die Datei auf virtio-fs). Große Pulls füllten den RAM schneller, als virtio-fs
-   ihn leerte. `losetup --direct-io=on` (util-linux; BusyBox in `docker:dind` kann das nicht) in einem
-   privilegierten Init-Container – Loop-Devices gehören dem Gast-Kernel, `dind` mountet dasselbe Gerät.
-3. **Unix-Sockets über virtio-fs gehen nicht** – nicht einmal zwischen zwei Containern derselben
-   microVM. Das Socket-Volume ist `emptyDir` mit `medium: Memory`; Kata macht daraus ein tmpfs im Gast.
-4. **`docker:dind` deklariert `VOLUME /var/lib/docker`.** Dort ist immer schon etwas gemountet;
-   „ist ein Mountpoint" reicht als Prüfung nicht. Geprüft wird auf die eigene ext4-Disk.
-5. **Keine Pod-Limits.** Kata steckt für Limits vCPUs und RAM im laufenden Betrieb an; angesteckte vCPUs
-   blieben in der verschachtelten VM hängen (`rcu_sched self-detected stall`). Die microVM bekommt
-   ihre Größe stattdessen per Kata-Drop-in beim Start; die Pods setzen nur Requests, damit der
-   Scheduler den echten Platzbedarf kennt. Kubernetes verlangt dabei Request ≤ Limit pro Container.
-6. **virtiofsd mit einem Thread** (Kata-Vorgabe) serialisiert alle Datei-Zugriffe des Gasts; jetzt 8.
-7. **ARC setzt die Labels nur beim Anlegen des Scale Sets.** Ein `helm upgrade` mit neuen Labels
+1. **Seccomp `RuntimeDefault` blockiert rootlesskit.** `clone`/`unshare(CLONE_NEWUSER)` schlägt mit
+   `fork/exec /proc/self/exe: operation not permitted` fehl. Profil `Unconfined`.
+2. **AppArmor `RuntimeDefault` verbietet rootlesskits Mounts** (`failed to share mount point: /:
+   permission denied`). Profil `Unconfined`.
+3. **`procMount: Unmasked`** (nur zusammen mit `hostUsers: false` erlaubt): runc mountet für jeden
+   `RUN`-Schritt ein frisches `/proc`; mit dem maskierten `/proc` scheitert das (`error mounting "proc"`).
+   Bewusst **nicht** `--oci-worker-no-process-sandbox` (RUN-Schritte würden den PID-Namespace mit
+   `buildkitd` teilen): Der Prozess-Sandbox von BuildKit bleibt an, `bk` setzt das Flag nie.
+4. **`allowPrivilegeEscalation: true`.** Mit `no_new_privs` kann das setuid-`newuidmap` die Sub-IDs
+   nicht abbilden.
+5. **Sub-IDs müssen im Namespace des Pods liegen.** Der Pod kennt nur die IDs 0–65535; ein Eintrag wie
+   `runner:100000:65536` in `/etc/subuid` liegt außerhalb, `newuidmap` scheitert. Die Toolbox trägt
+   deshalb `runner:2000:63000`.
+6. **Der Runner-User ist uid 1001.** Der Wrapper `tb` auf GitHub-hosted Runnern setzt darauf, dass der
+   Toolbox-User dieselbe uid wie der `runner`-User des Hosts hat, sonst gehören Dateien im Workspace
+   einem fremden Besitzer.
+7. **`XDG_RUNTIME_DIR` fehlt.** Das Image hat kein `/run/user/1001`; BuildKit-Socket und -State
+   liegen auf beschreibbaren `emptyDir`-Volumes.
+8. **`emptyDir` auf Platte, nicht `medium: Memory`.** Layer-Speicher eines Builds dürfen nicht als RAM zählen.
+9. **ARC setzt die Labels nur beim Anlegen des Scale Sets.** Ein `helm upgrade` mit neuen Labels
    ändert auf GitHub nichts – Jobs bleiben ungezuordnet. Labels ändern = `helm uninstall` + `install`.
-8. **Nicht das Pod-Template ändern, während Runner Jobs haben.** ARC ersetzt dann Runner, denen GitHub
-   schon Jobs zugeteilt hat; die Jobs hängen, bis man den Run abbricht.
-9. **`mkfs.ext4`** fehlt in `docker:dind` und in `debian:trixie-slim`; das Runner-Image hat es.
+10. **Nicht das Pod-Template ändern, während Runner Jobs haben.** ARC ersetzt dann Runner, denen GitHub
+    schon Jobs zugeteilt hat; die Jobs hängen, bis man den Run abbricht.
+11. **Privates Registry-Paket.** Ohne `imagePullSecret` `ErrImagePull` im Pod und ein Job, der ewig auf einen
+    Runner wartet. Auf GitHub-hosted Runnern `unauthorized`, wenn das Login mit dem `GITHUB_TOKEN` fehlt oder das
+    Aufrufer-Repo nicht unter *Manage Actions access* (Rolle Read) steht. Das Paket bleibt privat.
+
+12. **`newuidmap` braucht Datei-Capabilities statt setuid-root.** Ein setuid-root-Helfer in einem Pod ohne
+    `CAP_DAC_OVERRIDE` kann `/proc/<pid>/uid_map` des runner-eigenen rootlesskit-Prozesses nicht öffnen
+    (`newuidmap: open of uid_map failed: Permission denied`; mit `DAC_OVERRIDE` folgt `write to uid_map failed:
+    Operation not permitted`). Die Toolbox setzt deshalb `cap_setuid+ep`/`cap_setgid+ep` und entfernt das setuid-Bit
+    (wie das BuildKit-Rootless-Image).
+
+### Warum nicht Kata
+
+Der erste Ansatz war eine Kata-microVM pro Job (eigener Gast-Kernel, `docker:dind` darin privilegiert).
+Die Isolation ist stärker, aber der Knoten ist selbst eine VM: Die microVMs laufen **verschachtelt** auf
+einem kleinen 4-Kern-Host. Leichte Jobs liefen; unter Image-Builds (Pull, `docker build`, `docker save`,
+Trivy auf das Tar) fror der Gast so lange ein, dass Kata den Agenten für tot erklärte (`CheckRequest
+timed out`, `Dead agent`) – 16-mal in 25 Minuten normaler CI. Ein Security-Gate, das zufällig scheitert,
+ist schlechter als ein schwächer isoliertes. User-Namespaces haben keinen Gast-Kernel, kein virtio-fs und
+kein verschachteltes KVM; derselbe schwere Build lief ohne Hänger. Auf Bare Metal wäre Kata weiterhin
+die stärkere Wahl.
 
 ### Versionen
 
@@ -122,10 +149,9 @@ Alles gepinnt; Images per Digest (siehe `runners/arc/`).
 |---|---|
 | k3s | v1.36.5+k3s1 (Binary gegen `sha256sum-amd64.txt` geprüft) |
 | Helm | v4.3.1 (gegen die veröffentlichte SHA-256 geprüft) |
-| Kata Containers (kata-deploy) | 4.3.1, nur QEMU-Shim |
 | ARC (Controller + Scale Set) | 0.15.1 |
-| Runner-Image | `ghcr.io/actions/actions-runner:2.338.2` |
-| Docker-in-Docker | `docker:29.9.2-dind` |
+| Runner/Toolbox | `ci-toolbox` (Basis `ghcr.io/actions/actions-runner:2.338.2`), per Digest in `ci.yml`/`build-container.yml` |
+| BuildKit | `moby/buildkit:v0.34.2-rootless` (in der Toolbox) |
 
 ## Öffentliche Repos
 

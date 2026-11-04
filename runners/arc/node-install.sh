@@ -6,7 +6,7 @@
 #   k3s  (binary from the GitHub release, checked against its sha256sum-amd64.txt)
 #   helm (tarball from get.helm.sh, checked against its .sha256sum)
 # k3s config: no traefik/servicelb (nothing is served), secrets encrypted at rest (the GitHub App
-# key lives in a Secret), kubeconfig root-only. Kata Containers and ARC are installed with helm
+# key lives in a Secret), kubeconfig root-only. ARC is installed with helm
 # afterwards (README.md).
 set -euo pipefail
 
@@ -23,7 +23,6 @@ apt-get -o DPkg::Lock::Timeout=600 update -q
 apt-get -o DPkg::Lock::Timeout=600 install -y -q --no-install-recommends \
   curl ca-certificates jq qemu-guest-agent unattended-upgrades zstd
 systemctl enable --now qemu-guest-agent
-[ -e /dev/kvm ] || { echo "no /dev/kvm: Kata needs nested virtualization (cpu: host)" >&2; exit 1; }
 
 echo "== k3s $K3S_VERSION"
 rel="https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION//+/%2B}"

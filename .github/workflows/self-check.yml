@@ -24,6 +24,7 @@ jobs:
       contents: read
       actions: read # CodeQL needs workflow run metadata
       security-events: write # upload CodeQL results
+      packages: read # pull the private ci-toolbox (GitHub-hosted path)
     with:
       sast-languages: actions
 

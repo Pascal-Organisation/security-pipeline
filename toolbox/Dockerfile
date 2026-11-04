@@ -29,8 +29,13 @@ USER root
 # upgrade: the base image lags Ubuntu security fixes (Trivy found e.g. libbrotli1)
 RUN apt-get update \
  && apt-get -y upgrade \
- && apt-get install -y --no-install-recommends uidmap python3-venv jq git ca-certificates \
+ && apt-get install -y --no-install-recommends uidmap libcap2-bin python3-venv jq git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
+ # newuidmap/newgidmap with FILE CAPABILITIES instead of setuid root (what the upstream BuildKit rootless image
+ # does). A setuid-root helper in a pod that has dropped all capabilities (CAP_DAC_OVERRIDE) cannot open
+ # /proc/<pid>/uid_map of the runner-owned rootlesskit process: "open of uid_map failed: Permission denied".
+ && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap \
+ && setcap cap_setuid+ep /usr/bin/newuidmap && setcap cap_setgid+ep /usr/bin/newgidmap \
  # The runner bundles Node for JavaScript actions; it never uses the npm that ships with it, and that npm
  # carries known-vulnerable dependencies (tar, minimatch, glob, ...). Remove npm/npx, keep node.
  && rm -rf /home/runner/externals/node*/lib/node_modules/npm /home/runner/externals/node*/lib/node_modules/corepack \
@@ -46,6 +51,8 @@ COPY --from=shellcheck /bin/shellcheck /usr/local/bin/shellcheck
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
 COPY --from=crane /ko-app/crane /usr/local/bin/crane
 COPY --from=buildkit /usr/bin/buildctl /usr/bin/buildkitd /usr/bin/buildkit-runc /usr/bin/rootlesskit /usr/bin/buildctl-daemonless.sh /usr/local/bin/
+# bk: one Dockerfile stage with rootless BuildKit (process sandbox on), see the script and docs/switching-tools.md
+COPY --chmod=755 bk /usr/local/bin/bk
 RUN python3 -m venv /opt/py \
  && /opt/py/bin/pip install --no-cache-dir --disable-pip-version-check \
       "semgrep==${SEMGREP_VERSION}" "zizmor==${ZIZMOR_VERSION}" "bandit==${BANDIT_VERSION}" \
@@ -57,7 +64,7 @@ RUN python3 -m venv /opt/py \
  && trivy --version >/dev/null && syft version >/dev/null && trufflehog --version >/dev/null 2>&1 \
  && actionlint --version >/dev/null && hadolint --version >/dev/null && shellcheck --version >/dev/null \
  && cosign version >/dev/null 2>&1 && crane version >/dev/null && buildctl --version >/dev/null \
- && buildkitd --version >/dev/null && rootlesskit --version >/dev/null \
+ && buildkitd --version >/dev/null && rootlesskit --version >/dev/null && sh -n /usr/local/bin/bk \
  && semgrep --version >/dev/null && zizmor --version >/dev/null && bandit --version >/dev/null
 # tells the workflows' `tb` wrapper (ci.yml) to run tools directly instead of via docker run
 ENV TOOLBOX_NATIVE=1
