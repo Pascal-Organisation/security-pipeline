@@ -30,7 +30,7 @@ Signatur beweist also, dass beides lief, auch ohne Schutz von `main`.
 
 | | **öffentlich** | **privat** |
 |---|---|---|
-| Runner | GitHub-hosted (erzwungen) | eigener Runner, Label `ci`; Signieren GitHub-hosted |
+| Runner | GitHub-hosted (erzwungen) | eigene Runner-VM pro Vertrauensbereich; Signieren GitHub-hosted |
 | SAST | CodeQL | Semgrep (+ Bandit für Python) |
 | Signatur | Cosign keyless | Cosign keyless (Repo- und Workflow-Name stehen im öffentlichen Rekor-Log, Code nicht) |
 | Merge | `security-gate` ist Pflicht (Ruleset) | nicht blockierbar (GitHub Free), aber **kein Release ohne Gate und gemergten PR** |
@@ -191,28 +191,29 @@ Repos mit `container-pull` brauchen keine: Der Host holt selbst. Nur `static-ftp
 
 | Rolle | Labels in den Workflows | genutzt von | Netz |
 |---|---|---|---|
-| CI (VM 110) | `ci` | `homelab`, `knowledgebase`, `workingrepo` | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
-| CI, eigener Runner pro Repo | `pascalhaag-website`, `websiteghana`, `bahnbot` | das jeweilige Repo | wie `ci` |
+| Eigene Runner-VM pro auslieferndem Repo | `pascalhaag-website`, `websiteghana`, `bahnbot` | das jeweilige Repo | ausgehend nur DNS, 80/443, NTP; kein LAN |
+| Gemeinsame CI-VM | `ci` | Repos ohne Auslieferung (`homelab`, `knowledgebase`, …) | wie oben |
+| ARC auf k3s, eine Kata-microVM pro Job | `arc-trial` | **nur Versuch**, kein produktiver Workflow | wie oben |
 | GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos; für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
 
-Regeln: Es gibt keinen Deploy-Runner mehr. Container-Hosts holen sich signierte Images selbst
-(`app-deploy`), Shared Hosting bekommt seinen Upload von einem GitHub-hosted Runner. Die CI-VM
-ist per Proxmox-Firewall vom LAN getrennt; Self-hosted Runner nie für öffentliche Repos freigeben.
-Signiert wird immer GitHub-hosted, nie auf der CI-VM.
+Regeln: Es gibt keinen Deploy-Runner. Container-Hosts holen sich signierte Images selbst
+(`app-deploy`), Shared Hosting bekommt seinen Upload von einem GitHub-hosted Runner.
+Self-hosted Runner nie für öffentliche Repos freigeben. Signiert wird immer GitHub-hosted.
+
+Jedes ausliefernde Repo baut auf einer eigenen VM mit eigenem Docker-Daemon – ein Job eines anderen
+Repos kommt an dessen Build nicht heran. Der Kubernetes-Aufbau (frische microVM pro Job) ist fertig,
+läuft auf dieser Hardware aber nur verschachtelt und friert bei Image-Builds ein; deshalb Versuch.
+Aufbau, Bedrohungsmodell, Grenzen, Stolpersteine: **[docs/runners.md](docs/runners.md)**,
+Konfiguration in [`runners/arc/`](runners/arc/).
 
 **Grenzen, offen benannt:**
-- Die Runner sind **persistent**, nicht pro Job neu (Stand laut homelab- und
-  websiteghana-Doku). Arbeitsverzeichnis, Docker-Daemon, Images und Build-Cache bleiben
-  zwischen Jobs und Repos bestehen; Zugriff auf den Docker-Socket ist faktisch root auf der
-  VM. Gegenmaßnahmen hier: `docker build --pull`, Trivy-Cache pro Run, Scanner als
-  Runner-User, `persist-credentials: false`. Sauber wird es erst mit einer frischen VM pro
-  Job (Proxmox-Template klonen).
+- Innerhalb eines Repos bleibt der Runner persistent: Ein PR-Job kann Reste für den nächsten Release
+  desselben Repos hinterlassen (Begründung, warum das hier akzeptiert ist, in `docs/runners.md`).
 - TruffleHog kann ohne Egress zu den Providern nichts verifizieren – Funde sind dann
   `unknown` und blockieren (gewollt, aber laut).
 - zizmor und Bandit werden per pip **ohne Hashes** installiert (Version gepinnt). Das
-  digest-gepinnte zizmor-OCI-Image braucht x86-64-v2. Die VMs 110/111 laufen laut
-  websiteghana-Doku seit 05.10. mit CPU-Typ `host` – das Image sollte dort also laufen;
-  Umstellung steht noch aus.
+  digest-gepinnte zizmor-OCI-Image braucht x86-64-v2. Die Runner-VMs laufen mit CPU-Typ
+  `host` – das Image sollte dort laufen; Umstellung steht aus.
 
 ## Host-Setup (Container-Apps)
 

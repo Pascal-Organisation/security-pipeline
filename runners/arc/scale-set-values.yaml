@@ -1,0 +1,127 @@
+# Org-level runner scale set "arc-ci" (gha-runner-scale-set 0.15.1).
+# helm upgrade --install arc-ci oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+#   --version 0.15.1 -n arc-runners -f scale-set-values.yaml
+#
+# Every job gets a fresh pod in its own Kata microVM (runtimeClass kata-qemu) and the pod is deleted
+# afterwards (ephemeral). Docker-in-Docker runs privileged — but only inside that microVM, so a job
+# cannot reach the k3s node, other jobs, or another repo's build. That replaces the per-repo runner VMs.
+#
+# Labels: the labels the private repos' workflows ask for today, so no caller changes.
+githubConfigUrl: https://github.com/Pascal-Organisation
+githubConfigSecret: arc-github-app   # github_app_id, github_app_installation_id, github_app_private_key
+runnerGroup: Default
+runnerScaleSetName: arc-ci
+# TRIAL ONLY (2026-11-04). On this hardware the job microVMs run *nested* (Kata inside a Proxmox VM on
+# a small 4-core host) and freeze under heavier I/O until Kata's agent health check kills them
+# ("CheckRequest timed out" / "Dead agent"): 16 times in 25 minutes during normal CI. A security gate
+# that fails at random is worse than a slower one, so no real workflow targets this scale set; the
+# repos stay on their runner VMs (one per trust domain). Use `runs-on: [self-hosted, arc-trial]` to try it.
+# On a non-nested node (bare metal): put the real labels here and re-create the scale set
+# (ARC sets labels only at creation: helm uninstall + install).
+scaleSetLabels: [arc-trial]
+minRunners: 0
+# One job microVM at a time: the node VM has 5 GB (one 3.5 GB job VM + k3s), and two nested microVMs
+# on the 4-core host made the freezes described above more frequent.
+maxRunners: 1
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller
+
+listenerTemplate:
+  spec:
+    containers:
+    - name: listener
+      resources:
+        requests: {cpu: 20m, memory: 32Mi}
+        limits: {memory: 128Mi}
+
+template:
+  spec:
+    runtimeClassName: kata-qemu
+    automountServiceAccountToken: false
+    initContainers:
+    # Docker's storage cannot be overlayfs on the virtio-fs emptyDir; give it a sparse ext4 disk instead,
+    # attached as a loop device with DIRECT I/O. Buffered, every write sits in two guest page caches
+    # (ext4 + the virtio-fs backing file); big pulls/builds/`docker save` then filled guest RAM faster
+    # than virtio-fs drained it, the kata-agent died and the microVM with it ("Dead agent").
+    # util-linux losetup (runner image) can do --direct-io; busybox in docker:dind cannot. Loop devices
+    # belong to the guest kernel, so the one set up here is mounted by the dind container below.
+    - name: format-docker-disk
+      image: ghcr.io/actions/actions-runner:2.338.2@sha256:759a1d94a15b05941aba5196974ff43fe15b4cbba29b694b35cbc32a1166b232
+      securityContext: {runAsUser: 0, privileged: true}   # privileged inside the microVM only
+      command: ["sh", "-c"]
+      args:
+      - |
+        set -e
+        [ -e /dev/loop-control ] || mknod /dev/loop-control c 10 237
+        for i in 0 1 2 3 4 5 6 7; do [ -e /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
+        truncate -s 30G /scratch/docker.img
+        mkfs.ext4 -q -F /scratch/docker.img
+        losetup --direct-io=on -f --show /scratch/docker.img > /scratch/loopdev
+        [ "$(cat /sys/block/$(basename "$(cat /scratch/loopdev)")/loop/dio)" = 1 ]
+      volumeMounts: [{name: scratch, mountPath: /scratch}]
+    - name: init-dind-externals
+      image: ghcr.io/actions/actions-runner:2.338.2@sha256:759a1d94a15b05941aba5196974ff43fe15b4cbba29b694b35cbc32a1166b232
+      command: ["cp", "-r", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+      volumeMounts: [{name: dind-externals, mountPath: /home/runner/tmpDir}]
+    # native sidecar: starts before the runner, stops with the pod
+    - name: dind
+      image: docker:29.9.2-dind@sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977
+      restartPolicy: Always
+      securityContext: {privileged: true}
+      env: [{name: DOCKER_TLS_CERTDIR, value: ""}]
+      command: ["sh", "-c"]
+      args:
+      - |
+        set -e
+        mkdir -p /var/lib/docker
+        # The image declares VOLUME /var/lib/docker, so something is always mounted there:
+        # check for *our* ext4 disk, not just "is a mountpoint" (sidecar restarts keep it mounted).
+        dev="$(cat /scratch/loopdev)"
+        n="${dev#/dev/loop}"; [ -e "$dev" ] || mknod "$dev" b 7 "$n"
+        grep -q ' /var/lib/docker ext4 ' /proc/mounts || mount "$dev" /var/lib/docker
+        grep -q ' /var/lib/docker ext4 ' /proc/mounts || { echo "docker disk not mounted" >&2; exit 1; }
+        exec dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock --group=123
+      startupProbe:
+        exec: {command: ["docker", "info"]}
+        periodSeconds: 2
+        timeoutSeconds: 5
+        failureThreshold: 60
+      # Request without limit: counted by the scheduler, but does not cap dockerd inside the guest.
+      resources:
+        requests: {memory: 2Gi}
+      volumeMounts:
+      - {name: work, mountPath: /home/runner/_work}
+      - {name: dind-sock, mountPath: /var/run}
+      - {name: dind-externals, mountPath: /home/runner/externals}
+      - {name: scratch, mountPath: /scratch}
+    containers:
+    - name: runner
+      image: ghcr.io/actions/actions-runner:2.338.2@sha256:759a1d94a15b05941aba5196974ff43fe15b4cbba29b694b35cbc32a1166b232
+      command: ["/home/runner/run.sh"]
+      env:
+      - {name: DOCKER_HOST, value: unix:///var/run/docker.sock}
+      - {name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS, value: "120"}
+      # Kata sizes the microVM from the pod's limits: 1 default vCPU + 2 = 3 vCPUs, and
+      # 2 GB default guest RAM + 1.5 GiB = 3.5 GB. 2 GB alone was too small: Semgrep and Trivy got the
+      # runner OOM-killed *inside* the guest ("runner lost communication", no logs uploaded).
+      # The limit sits on the runner container (which needs ~200 MB), so dind and the job's containers
+      # can use the whole guest. Requests (1.5 GiB here + 2 GiB on dind) are what the scheduler counts:
+      # the guest RAM, so concurrent jobs never exceed what the node holds. Kubernetes needs
+      # request <= limit per container, hence the split.
+      # No limits on purpose: Kata would hot-plug vCPUs/memory for them, and hot-plugged vCPUs stall in
+      # this nested setup (RCU stall -> dead kata-agent). The microVM boots at 2 vCPUs / 3.5 GB from
+      # kata-sizing.toml instead. The requests here + on dind (1.5 + 2 GiB) tell the scheduler what a
+      # job VM really occupies, so jobs never outnumber what the node can hold.
+      resources:
+        requests: {cpu: 500m, memory: 1536Mi}
+      volumeMounts:
+      - {name: work, mountPath: /home/runner/_work}
+      - {name: dind-sock, mountPath: /var/run}
+    volumes:
+    - {name: work, emptyDir: {}}
+    # Memory: Kata makes this a tmpfs inside the guest. A unix socket on a normal (virtio-fs) emptyDir
+    # cannot be connected to, not even from the other container in the same microVM.
+    - {name: dind-sock, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
+    - {name: dind-externals, emptyDir: {}}
+    - {name: scratch, emptyDir: {}}
