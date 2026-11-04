@@ -50,14 +50,17 @@ RUN python3 -m venv /opt/py \
  && /opt/py/bin/pip install --no-cache-dir --disable-pip-version-check \
       "semgrep==${SEMGREP_VERSION}" "zizmor==${ZIZMOR_VERSION}" "bandit==${BANDIT_VERSION}" \
  && ln -s /opt/py/bin/semgrep /opt/py/bin/zizmor /opt/py/bin/bandit /usr/local/bin/ \
- # rootless BuildKit maps build-container users into this range
- && echo "runner:100000:65536" > /etc/subuid && echo "runner:100000:65536" > /etc/subgid \
+ # rootless BuildKit maps build-container users into this range. It must lie inside the ids a
+ # user-namespaced pod owns (0-65535, hostUsers: false) and above runner's uid 1001.
+ && echo "runner:2000:63000" > /etc/subuid && echo "runner:2000:63000" > /etc/subgid \
  # every tool must start; a broken COPY path fails the build here, not in a pipeline run
  && trivy --version >/dev/null && syft version >/dev/null && trufflehog --version >/dev/null 2>&1 \
  && actionlint --version >/dev/null && hadolint --version >/dev/null && shellcheck --version >/dev/null \
  && cosign version >/dev/null 2>&1 && crane version >/dev/null && buildctl --version >/dev/null \
  && buildkitd --version >/dev/null && rootlesskit --version >/dev/null \
  && semgrep --version >/dev/null && zizmor --version >/dev/null && bandit --version >/dev/null
+# tells the workflows' `tb` wrapper (ci.yml) to run tools directly instead of via docker run
+ENV TOOLBOX_NATIVE=1
 USER runner
 LABEL org.opencontainers.image.source="https://github.com/Pascal-Organisation/security-pipeline" \
       org.opencontainers.image.description="security-pipeline CI toolbox: runner + scanners + rootless BuildKit, no Docker daemon"
