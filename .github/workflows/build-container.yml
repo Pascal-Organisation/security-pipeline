@@ -118,7 +118,9 @@ jobs:
       contents: read
       actions: read # CodeQL needs workflow run metadata
       security-events: write # upload CodeQL results
+      packages: read # nested jobs pull the private ci-toolbox on GitHub-hosted runners
     with:
+      runner: ${{ inputs.runner }}
       sast-languages: ${{ inputs.sast-languages }}
       python-paths: ${{ inputs.python-paths }}
       dockerfile: ${{ inputs.dockerfile }}
