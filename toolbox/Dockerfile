@@ -26,9 +26,15 @@ ARG ZIZMOR_VERSION=1.31.1
 ARG BANDIT_VERSION=1.9.4
 USER root
 # uidmap: newuidmap/newgidmap for rootless BuildKit; python3-venv for Semgrep/zizmor/Bandit
+# upgrade: the base image lags Ubuntu security fixes (Trivy found e.g. libbrotli1)
 RUN apt-get update \
+ && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends uidmap python3-venv jq git ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ # The runner bundles Node for JavaScript actions; it never uses the npm that ships with it, and that npm
+ # carries known-vulnerable dependencies (tar, minimatch, glob, ...). Remove npm/npx, keep node.
+ && rm -rf /home/runner/externals/node*/lib/node_modules/npm /home/runner/externals/node*/lib/node_modules/corepack \
+           /home/runner/externals/node*/bin/npm /home/runner/externals/node*/bin/npx /home/runner/externals/node*/bin/corepack
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=syft /syft /usr/local/bin/syft
 COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
