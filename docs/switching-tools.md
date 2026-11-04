@@ -54,6 +54,31 @@ in die `ClusterImagePolicy`-Objekte, dann die Aufrufer (Renovate) anheben. Ein R
 der nicht auf `main` liegt, landet nie in den Policies. (Hosts mit dem Legacy-Agent `app-deploy`:
 `tools/fleet-hosts.sh --upgrade <tag>`.)
 
+## Images bauen: `bk`
+
+`bk` (in der Toolbox, `toolbox/bk` → `/usr/local/bin/bk`) baut **eine Stufe** eines Dockerfiles mit rootless
+BuildKit, ohne Docker-Daemon. Aufrufer-Repos brauchen keinen eigenen Hilfs-Wrapper mehr:
+
+```sh
+bk [<stage>] [-C <context>] [-f <dockerfile>] [--build-arg K=V]... [weitere buildctl-Argumente]
+```
+
+- Ohne `--output` wird nur gebaut (geprüft), nichts exportiert; ein fehlschlagender `RUN`-Schritt lässt die
+  Stufe scheitern. Für ein Image: `--output type=oci,dest=$RUNNER_TEMP/image.tar`.
+- Alles Unbekannte geht unverändert an `buildctl build` (`--opt label:k=v`, `--no-cache`, ...).
+- BuildKit-Zustand und Socket liegen unter `$RUNNER_TEMP` (`--root`, `--otel-socket-path`), pro Job neu;
+  Base-Images werden immer aus der Registry aufgelöst.
+- **Der Prozess-Sandbox von BuildKit bleibt an**; `--oci-worker-no-process-sandbox` wird nicht benutzt. Jeder
+  `RUN`-Schritt bekommt dann einen eigenen PID-Namespace und ein frisches `/proc`. Das setzt voraus:
+  im Cluster `procMount: Unmasked` (Pod mit `hostUsers: false`), auf GitHub-hosted Runnern
+  `docker run --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined`.
+  Ohne `systempaths=unconfined` überdecken Dockers maskierte `/proc`-Pfade das äußere `/proc`, und der Kernel
+  verweigert runc das Mounten eines neuen (`error mounting "proc"`).
+- Auf GitHub-hosted Runnern läuft es über den Wrapper `tb` (`tb bk runtime ...`), im Cluster direkt (`bk runtime ...`).
+  Dort muss der Wrapper `RUNNER_TEMP` in den Container durchreichen, sonst landet der Zustand in `/tmp`.
+- `build-container.yml` benutzt `bk` selbst; ein neuer `bk`-Stand erreicht Aufrufer und Workflows erst, wenn
+  das neu gebaute Toolbox-Image als `TOOLBOX`-Digest gepinnt ist (ci.yml und build-container.yml, Cluster-Values).
+
 ## Rollout-Ringe
 
 | Ring | Repos | Wann |

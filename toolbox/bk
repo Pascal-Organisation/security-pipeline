@@ -1,0 +1,52 @@
+#!/bin/sh
+# bk: build ONE stage of a Dockerfile with rootless BuildKit, no Docker daemon (part of the ci-toolbox,
+# /usr/local/bin/bk). BuildKit's process sandbox stays ON: every RUN step gets its own PID namespace and a
+# fresh /proc. That needs the pod's `procMount: Unmasked` (CI cluster) or, in `docker run`,
+# `--security-opt systempaths=unconfined`; see docs/switching-tools.md. Never add
+# --oci-worker-no-process-sandbox.
+#
+#   bk [<stage>] [-C <context>] [-f <dockerfile>] [--build-arg K=V]... [<buildctl build args>...]
+#
+#   <stage>         Dockerfile stage to build (BuildKit target); without it the last stage
+#   -C <dir>        build context (default .)
+#   -f <file>       Dockerfile (default ./Dockerfile; may lie in another directory than the context)
+#   --build-arg K=V ARG of the Dockerfile
+#   everything else goes to `buildctl build` unchanged, e.g. --output type=oci,dest=x.tar,
+#   --opt label:k=v, --no-cache. Without --output the result is only built (checked), not exported.
+#
+# State: a fresh BuildKit root and socket directory below $RUNNER_TEMP (fallback $TMPDIR, /tmp), so no cache
+# survives the job; base images are always resolved from the registry (image-resolve-mode=pull).
+set -eu
+
+stage="" context="." file="Dockerfile"
+case "${1:-}" in -*|"") ;; *) stage="$1"; shift ;; esac
+
+# Arguments are collected in "$@" (rotated once): extra buildctl args stay intact, no word splitting.
+n=$#
+while [ "$n" -gt 0 ]; do
+  a="$1"; shift; n=$((n - 1))
+  case "$a" in
+    -C) [ "$n" -gt 0 ] || { echo "bk: -C needs a directory" >&2; exit 2; }; context="$1"; shift; n=$((n - 1)) ;;
+    -f) [ "$n" -gt 0 ] || { echo "bk: -f needs a file" >&2; exit 2; }; file="$1"; shift; n=$((n - 1)) ;;
+    --build-arg) [ "$n" -gt 0 ] || { echo "bk: --build-arg needs K=V" >&2; exit 2; }
+                 set -- "$@" --opt "build-arg:$1"; shift; n=$((n - 1)) ;;
+    --build-arg=*) set -- "$@" --opt "build-arg:${a#--build-arg=}" ;;
+    *) set -- "$@" "$a" ;;
+  esac
+done
+
+[ -f "$file" ] || { echo "bk: Dockerfile '$file' not found" >&2; exit 2; }
+[ -n "$stage" ] && set -- --opt "target=$stage" "$@"
+
+base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+XDG_RUNTIME_DIR="$base/xdg-run" XDG_DATA_HOME="$base/buildkit-state"
+export XDG_RUNTIME_DIR XDG_DATA_HOME
+mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME"
+chmod 700 "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME"
+# --root, --otel-socket-path: inside rootlesskit buildkitd is uid 0 and would default to /var/lib/buildkit and
+# /run/buildkit, which the runner user cannot create; both go to the job's temp dir instead.
+export BUILDKITD_FLAGS="--root $XDG_DATA_HOME/buildkit --otel-socket-path $XDG_RUNTIME_DIR/otel-grpc.sock"
+
+exec buildctl-daemonless.sh build --progress=plain --frontend dockerfile.v0 \
+  --local "context=$context" --local "dockerfile=$(dirname "$file")" \
+  --opt "filename=$(basename "$file")" --opt image-resolve-mode=pull "$@"

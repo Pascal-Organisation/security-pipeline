@@ -62,7 +62,7 @@ Digest in genau einer Variable (`TOOLBOX`, Renovate hält sie aktuell).
 | | CI-Cluster (privat) | GitHub-hosted (öffentlich) |
 |---|---|---|
 | Wo laufen die Tools? | Der Runner-Pod **ist** die Toolbox (`TOOLBOX_NATIVE=1`), alles läuft direkt | `docker run` des Toolbox-Images über den Wrapper `tb` |
-| Image bauen | rootless BuildKit im Pod, ohne root und ohne Daemon | dasselbe `buildctl-daemonless.sh`, im Toolbox-Container |
+| Image bauen | rootless BuildKit im Pod, ohne root und ohne Daemon | dasselbe `buildctl-daemonless.sh` (Wrapper `bk`), im Toolbox-Container |
 | Docker nötig? | nein: kein Socket, kein dind, kein `privileged` | nur als Startmechanismus für den Toolbox-Container |
 
 Gleiche Schritte, gleiche Tool-Versionen überall. Der Pod ist nicht privilegiert, nutzt User Namespaces

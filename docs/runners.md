@@ -82,7 +82,7 @@ nie, sie bekommen nur eine Just-in-time-Registrierung für genau einen Job.
   `GITHUB_TOKEN` (`packages: read`) an der GHCR an. Dafür muss **jedes** Aufrufer-Repo, das auf GitHub-hosted Runnern
   läuft, unter *Packages → ci-toolbox → Package settings → Manage Actions access* mit der Rolle **Read**
   eingetragen sein (nur in der Oberfläche möglich).
-- Der Pfad auf GitHub-hosted Runnern (`docker run` mit `seccomp`/`apparmor=unconfined` für
+- Der Pfad auf GitHub-hosted Runnern (`docker run` mit `seccomp`/`apparmor`/`systempaths=unconfined` für
   BuildKit) betrifft nur öffentliche Repos und Signieren/Re-Scan; dort ist der Runner ohnehin
   eine Wegwerf-VM von GitHub.
 
@@ -103,8 +103,8 @@ Für alle, die das nachbauen – jeder davon hat Jobs scheitern lassen:
    permission denied`). Profil `Unconfined`.
 3. **`procMount: Unmasked`** (nur zusammen mit `hostUsers: false` erlaubt): runc mountet für jeden
    `RUN`-Schritt ein frisches `/proc`; mit dem maskierten `/proc` scheitert das (`error mounting "proc"`).
-   Alternative: `BUILDKITD_FLAGS=--oci-worker-no-process-sandbox` (RUN-Schritte teilen dann den
-   PID-Namespace mit `buildkitd`).
+   Bewusst **nicht** `--oci-worker-no-process-sandbox` (RUN-Schritte würden den PID-Namespace mit
+   `buildkitd` teilen): Der Prozess-Sandbox von BuildKit bleibt an, `bk` setzt das Flag nie.
 4. **`allowPrivilegeEscalation: true`.** Mit `no_new_privs` kann das setuid-`newuidmap` die Sub-IDs
    nicht abbilden.
 5. **Sub-IDs müssen im Namespace des Pods liegen.** Der Pod kennt nur die IDs 0–65535; ein Eintrag wie

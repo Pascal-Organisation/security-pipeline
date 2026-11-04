@@ -150,7 +150,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
 
-      # `tb <tool> ...`: see ci.yml. Here the wrapper also passes the BuildKit settings through and
+      # `tb <tool> ...`: see ci.yml. Here the wrapper also passes RUNNER_TEMP (state directory of `bk`) and
       # takes extra `docker run` options in TB_RUN_OPTS (GitHub-hosted only; the CI cluster ignores them).
       - name: Toolbox
         env:
@@ -162,7 +162,7 @@ jobs:
           [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
           # shellcheck disable=SC2086 # TB_RUN_OPTS is set by this workflow, never from an input
           exec docker run --rm $TB_RUN_OPTS -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
-            -e XDG_RUNTIME_DIR -e XDG_DATA_HOME -e BUILDKITD_FLAGS \
+            -e RUNNER_TEMP \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
           EOF
           chmod 755 "$RUNNER_TEMP/tb/tb"; echo "$RUNNER_TEMP/tb" >> "$GITHUB_PATH"
@@ -192,26 +192,21 @@ jobs:
           # image not built strictly later than the one running (replay protection).
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           source="https://github.com/$GITHUB_REPOSITORY"
-          # Rootless BuildKit, started in-process by buildctl-daemonless.sh: no long-running daemon, no root,
-          # a fresh state directory per job (so no cache from other jobs) and image-resolve-mode=pull, so
-          # base images are always resolved from the registry.
-          # --oci-worker-no-process-sandbox: the pod has no PID namespace of its own for the build steps.
-          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-run" XDG_DATA_HOME="$RUNNER_TEMP/buildkit-state"
-          # --root, --otel-socket-path: inside rootlesskit buildkitd is uid 0 and would default to /var/lib/buildkit and
-          # /run/buildkit, which the runner user cannot create; both go to this job's temp dir instead.
-          export BUILDKITD_FLAGS="--oci-worker-no-process-sandbox --root $XDG_DATA_HOME/buildkit --otel-socket-path $XDG_RUNTIME_DIR/otel-grpc.sock"
-          mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" && chmod 700 "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME"
-          opts=(--opt "filename=$(basename "$DOCKERFILE")" --opt "build-arg:GIT_SHA=$GITHUB_SHA"
+          # `bk` (toolbox): rootless BuildKit, started in-process by buildctl-daemonless.sh: no long-running daemon,
+          # no root, a fresh state directory per job (so no cache from other jobs) and image-resolve-mode=pull, so
+          # base images are always resolved from the registry. BuildKit's process sandbox stays on: the cluster pod
+          # has procMount Unmasked, and the docker run below systempaths=unconfined, for the fresh /proc of each RUN.
+          opts=(--build-arg "GIT_SHA=$GITHUB_SHA"
                 --opt "label:org.opencontainers.image.created=$created"
                 --opt "label:org.opencontainers.image.revision=$GITHUB_SHA"
-                --opt "label:org.opencontainers.image.source=$source" --opt image-resolve-mode=pull)
-          [ -n "$TARGET" ] && opts+=(--opt "target=$TARGET")
+                --opt "label:org.opencontainers.image.source=$source")
+          stage=(); [ -n "$TARGET" ] && stage=("$TARGET")
           # GitHub-hosted only: the toolbox container needs the unconfined seccomp/AppArmor profiles that
-          # rootless BuildKit asks for (user namespaces, mount). Still no --privileged, still no root.
-          export TB_RUN_OPTS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined"
-          tb buildctl-daemonless.sh build --frontend dockerfile.v0 \
-            --local "context=$CONTEXT" --local "dockerfile=$(dirname "$DOCKERFILE")" \
-            "${opts[@]}" --output "type=oci,dest=$TAR"
+          # rootless BuildKit asks for (user namespaces, mount) and unmasked /proc paths (the sandbox mounts
+          # a fresh /proc; the kernel refuses that while Docker's default masks still cover the outer one).
+          # Still no --privileged, still no root.
+          export TB_RUN_OPTS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined"
+          tb bk "${stage[@]}" -C "$CONTEXT" -f "$DOCKERFILE" "${opts[@]}" --output "type=oci,dest=$TAR"
           ls -la "$TAR"
           # Trivy cannot read an OCI-layout *tar* (only docker-archive tars or layout directories), Syft and crane
           # read the directory too: unpack once, every later step reads exactly these bytes.
