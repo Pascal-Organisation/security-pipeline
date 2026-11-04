@@ -57,7 +57,7 @@ template:
       #   cosign verify <image>@<digest> --certificate-identity \
       #     https://github.com/Pascal-Organisation/security-pipeline/.github/workflows/toolbox.yml@refs/heads/main \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-      image: ghcr.io/pascal-organisation/ci-toolbox@sha256:7455162143b9064fcff3bab659b14f6a1b4684c344b27b4e58d8f706dca84d31
+      image: ghcr.io/pascal-organisation/ci-toolbox@sha256:61757ab62d17b7142f3305e5f5b20bb7cd4012c078c9d1bc2d7e2393fc66c61d
       command: ["/home/runner/run.sh"]
       env:
       # rootless BuildKit: socket/state locations that are writable for uid 1001 (no /run/user/1001 in the image)
