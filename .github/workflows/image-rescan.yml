@@ -29,18 +29,24 @@ jobs:
     env:
       TAG: ${{ inputs.tag }}
     steps:
+      # Trivy pulls the image itself with the registry credentials in its environment: no docker login,
+      # pull or save. Docker only starts the pinned Trivy image (this workflow is GitHub-hosted only, and
+      # Trivy is the only tool it needs, so it does not pull in the whole ci-toolbox).
       - name: Trivy (fixable HIGH/CRITICAL fail)
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::bad tag"; exit 1; }
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" && mkdir -p "$DOCKER_CONFIG"
-          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          out="$RUNNER_TEMP/rescan" && mkdir -p "$out" && chmod 0777 "$out"
+          trivy() { docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD -v "$out:/out" "$TRIVY_IMAGE" "$@"; }
           ref="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG}"
-          docker pull --quiet "$ref" > /dev/null
-          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$ref")"
+          # Scan once into JSON (only what fails the gate survives the filters), print it, then decide.
+          trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 \
+            --format json --output /out/report.json "$ref"
+          digest="$(jq -er '.Metadata.RepoDigests[0]' "$out/report.json")"
           echo "### Re-scan of \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
-          docker save "$ref" -o "$RUNNER_TEMP/image.tar"
-          docker run --rm -v "$RUNNER_TEMP/image.tar:/img.tar:ro" "$TRIVY_IMAGE" \
-            image --input /img.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          trivy convert --format table /out/report.json
+          fixable="$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$out/report.json")"
+          echo "Fixable HIGH/CRITICAL: $fixable"
+          [ "$fixable" -eq 0 ] || { echo "::error::$fixable fixable HIGH/CRITICAL vulnerabilities in $digest"; exit 1; }
