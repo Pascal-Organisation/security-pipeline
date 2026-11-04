@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 #
 # ci-toolbox — every tool the pipeline runs, in one image, so CI jobs need NO Docker daemon.
 #
@@ -50,8 +50,9 @@ RUN python3 -m venv /opt/py \
  && /opt/py/bin/pip install --no-cache-dir --disable-pip-version-check \
       "semgrep==${SEMGREP_VERSION}" "zizmor==${ZIZMOR_VERSION}" "bandit==${BANDIT_VERSION}" \
  && ln -s /opt/py/bin/semgrep /opt/py/bin/zizmor /opt/py/bin/bandit /usr/local/bin/ \
- # rootless BuildKit maps build-container users into this range
- && echo "runner:100000:65536" > /etc/subuid && echo "runner:100000:65536" > /etc/subgid \
+ # rootless BuildKit maps build-container users into this range. It must lie inside the ids a
+ # user-namespaced pod owns (0-65535, hostUsers: false) and above runner's uid 1001.
+ && echo "runner:2000:63000" > /etc/subuid && echo "runner:2000:63000" > /etc/subgid \
  # every tool must start; a broken COPY path fails the build here, not in a pipeline run
  && trivy --version >/dev/null && syft version >/dev/null && trufflehog --version >/dev/null 2>&1 \
  && actionlint --version >/dev/null && hadolint --version >/dev/null && shellcheck --version >/dev/null \

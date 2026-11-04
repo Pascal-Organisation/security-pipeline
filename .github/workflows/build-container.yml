@@ -33,6 +33,10 @@ on:
         description: "Deprecated, ignored (kept so that existing callers keep working): private repos always use the CI cluster (arc-ci)."
         type: string
         default: ""
+      runner:
+        description: "Runner scale set (label) for PRIVATE repos. Default is the production CI cluster; only set it to try another scale set. Public repos ignore it and always run GitHub-hosted."
+        type: string
+        default: "arc-ci"
       context:
         type: string
         default: "."
@@ -82,7 +86,7 @@ env:
   # equal to the VERSION file and the release tag.
   PIPELINE_VERSION: v3.0.0
   # same pin as in ci.yml (Renovate moves both)
-  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:TOOLBOX_DIGEST_PENDING
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:7455162143b9064fcff3bab659b14f6a1b4684c344b27b4e58d8f706dca84d31
 
 jobs:
   # A direct push still lands in git on GitHub Free; it just never gets signed.
@@ -123,7 +127,7 @@ jobs:
   build:
     name: Build, scan, SBOM, push
     needs: gate
-    runs-on: ${{ needs.gate.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.gate.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read

@@ -31,6 +31,10 @@ on:
         description: "Deprecated, ignored (kept so that existing callers keep working): private repos always use the CI cluster (arc-ci)."
         type: string
         default: ""
+      runner:
+        description: "Runner scale set (label) for PRIVATE repos. Default is the production CI cluster; only set it to try another scale set. Public repos ignore it and always run GitHub-hosted."
+        type: string
+        default: "arc-ci"
       sast-languages:
         description: "Public repos: languages for SAST, comma-separated (e.g. python,actions). Empty skips SAST there."
         type: string
@@ -56,7 +60,7 @@ permissions: {}
 
 env:
   # The one image all tools come from (toolbox.yml builds and signs it). Renovate moves the pin.
-  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:TOOLBOX_DIGEST_PENDING
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:7455162143b9064fcff3bab659b14f6a1b4684c344b27b4e58d8f706dca84d31
 
 jobs:
   visibility:
@@ -80,7 +84,7 @@ jobs:
   workflow-lint:
     name: Workflow lint
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -117,7 +121,7 @@ jobs:
   secrets:
     name: Secrets
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -176,7 +180,7 @@ jobs:
     name: SAST (private)
     needs: visibility
     if: ${{ needs.visibility.outputs.private == 'true' }}
-    runs-on: arc-ci
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -211,7 +215,7 @@ jobs:
     name: SAST (Python)
     needs: visibility
     if: ${{ needs.visibility.outputs.private == 'true' && inputs.python-paths != '' }}
-    runs-on: arc-ci
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -234,7 +238,7 @@ jobs:
   dependencies:
     name: Dependencies & IaC
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -279,7 +283,7 @@ jobs:
     name: Dockerfile lint
     needs: visibility
     if: ${{ inputs.dockerfile != '' }}
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -300,7 +304,7 @@ jobs:
   shell-lint:
     name: Shell lint (trial)
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -326,7 +330,7 @@ jobs:
   runtime-images:
     name: Runtime images (trial)
     needs: visibility
-    runs-on: ${{ needs.visibility.outputs.private == 'true' && 'arc-ci' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read

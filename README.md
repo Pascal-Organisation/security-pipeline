@@ -237,6 +237,9 @@ Hosting bekommt seinen Upload von einem GitHub-hosted Runner. Self-hosted Runner
 Repos freigeben. Signiert wird immer GitHub-hosted, nie im CI-Cluster. Die früheren persistenten
 Runner-VMs (Label `ci`) und der Input `private-runner` sind abgelöst; der Input wird noch angenommen,
 aber ignoriert, damit bestehende Aufrufer nicht brechen.
+Mit dem Input `runner` (Standard `arc-ci`) lässt sich für private Repos ein anderes Scale Set ansteuern, z. B. zum
+Ausprobieren. Aufbau, Bedrohungsmodell, Grenzen, Stolpersteine: **[docs/runners.md](docs/runners.md)**, Konfiguration in
+[`runners/arc/`](runners/arc/).
 
 **Grenzen, offen benannt:**
 - Jeder Job bekommt einen **frischen Pod**: Arbeitsverzeichnis, BuildKit-Zustand und Trivy-Cache werden
