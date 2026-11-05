@@ -10,8 +10,7 @@ Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und g
 > gepusht wird. Deployt wird per **Cluster-Admission** statt per Host-Agent: Der Cluster nimmt nur Images an,
 > die `build-container.yml` (gepinnt auf Commit) signiert hat. Signierte SBOMs gehen an Dependency-Track.
 > Tools lassen sich hier zentral tauschen: [docs/switching-tools.md](docs/switching-tools.md). Neues Projekt
-> anbinden: [docs/new-project.md](docs/new-project.md). Stand: `tools/fleet-status.sh` (Repos),
-> `tools/fleet-hosts.sh` (Hosts, die noch `app-deploy` nutzen).
+> anbinden: [docs/new-project.md](docs/new-project.md). Stand: `tools/fleet-status.sh` (Repos).
 
 ---
 
@@ -34,7 +33,7 @@ Signatur beweist also, dass beides lief, auch ohne Schutz von `main`.
 
 | | **öffentlich** | **privat** |
 |---|---|---|
-| Runner | GitHub-hosted (erzwungen) | CI-Cluster (Kubernetes, ARC-Scale-Set `arc-ci`, ein frischer Pod pro Job); Signieren GitHub-hosted |
+| Runner | GitHub-hosted (Standard; Opt-in: eigenes Scale Set nur für den Build, Input `public-runner`) | CI-Cluster (Kubernetes, ARC-Scale-Set `arc-ci`, ein frischer Pod pro Job); Signieren GitHub-hosted |
 | SAST | CodeQL | Semgrep (+ Bandit für Python) |
 | Signatur | Cosign keyless | Cosign keyless (Repo- und Workflow-Name stehen im öffentlichen Rekor-Log, Code nicht) |
 | Merge | `security-gate` ist Pflicht (Ruleset) | nicht blockierbar (GitHub Free), aber **kein Release ohne Gate und gemergten PR** |
@@ -120,8 +119,7 @@ abgelehnt. **Bei jedem Pipeline-Release kommt dessen SHA in die Policies**, erst
 darauf pinnen. Die Datei darf nicht ohne die Überlappung aus
 [docs/switching-tools.md](docs/switching-tools.md) umbenannt werden.
 
-Der Host-Agent `app-deploy` (`deployer/`) ist damit abgelöst. Er bleibt in diesem Repo, bis der letzte
-Host migriert ist, und wird danach entfernt.
+Der frühere Host-Agent `app-deploy` ist seit v3.0.2 entfernt (zuletzt enthalten in v3.0.1).
 
 ### `deploy-static.yml` – Shared Hosting (privat)
 
@@ -161,9 +159,7 @@ Cluster läuft (nach einem Rollback sind das zwei verschiedene Images). Noch ruf
 ### Deploy-Status
 
 Grün in GitHub heißt nur: Das Release ist fertig und signiert. Ob es läuft, zeigt der Cluster (Monitoring
-im App-Cluster). Hosts, die noch `app-deploy` nutzen, schreiben nach jedem Lauf
-`/var/lib/app-deploy/<app>.json` (Version, laufender Digest, Ergebnis, Fehler); `tools/fleet-hosts.sh`
-vergleicht das mit dem neuesten Image.
+im App-Cluster).
 
 ---
 
@@ -238,15 +234,21 @@ Cluster, nicht im Repo.
 | Rolle | Labels in den Workflows | genutzt von | Netz |
 |---|---|---|---|
 | CI-Cluster | `arc-ci` (ARC-Scale-Set, Pod = `ci-toolbox`) | alle **privaten** Repos: Gate und Build | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
-| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos; für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
+| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos (Standard); für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
 
 Regeln: Es gibt keinen Deploy-Runner. Der Cluster nimmt signierte Images per Admission an, Shared
 Hosting bekommt seinen Upload von einem GitHub-hosted Runner. Self-hosted Runner nie für öffentliche
-Repos freigeben. Signiert wird immer GitHub-hosted, nie im CI-Cluster. Die früheren persistenten
+Repos freigeben, außer per Opt-in (siehe unten). Signiert wird immer GitHub-hosted, nie im CI-Cluster. Die früheren persistenten
 Runner-VMs (Label `ci`) und der Input `private-runner` sind abgelöst; der Input wird noch angenommen,
 aber ignoriert, damit bestehende Aufrufer nicht brechen.
 Mit dem Input `runner` (Standard `arc-ci`) lässt sich für private Repos ein anderes Scale Set ansteuern, z. B. zum
-Ausprobieren. Aufbau, Bedrohungsmodell, Grenzen, Stolpersteine: **[docs/runners.md](docs/runners.md)**, Konfiguration in
+Ausprobieren.
+Opt-in für öffentliche Repos: Der Input `public-runner` von `build-container.yml` (Standard leer = GitHub-hosted)
+legt das Runner-Label **nur für den Build-Job** fest. Das ist nötig, weil rootless BuildKit auf GitHub-hosted
+Ubuntu 24.04 scheitert (`kernel.apparmor_restrict_unprivileged_userns=1`). Es ist nur sicher mit einer
+Runner-Gruppe, die auf genau dieses eine Repo beschränkt ist: `build-container.yml` läuft nur auf
+`refs/heads/main` nach der Release-Policy, Fork-PR-Code erreicht den Runner also nicht. Gate, Signieren und
+Dependency-Track bleiben GitHub-hosted. Aufbau, Bedrohungsmodell, Grenzen, Stolpersteine: **[docs/runners.md](docs/runners.md)**, Konfiguration in
 [`runners/arc/`](runners/arc/).
 
 **Grenzen, offen benannt:**
@@ -260,27 +262,6 @@ Ausprobieren. Aufbau, Bedrohungsmodell, Grenzen, Stolpersteine: **[docs/runners.
   `unknown` und blockieren (gewollt, aber laut).
 - Semgrep, zizmor und Bandit werden beim Bau der Toolbox per pip **ohne Hashes** installiert (Version
   gepinnt).
-
-## Host-Setup (Legacy: `app-deploy`)
-
-Nur noch für Hosts, die nicht im App-Cluster laufen. Neue Apps brauchen das nicht: Sie bekommen eine
-`ClusterImagePolicy` und ein Manifest im App-Cluster.
-
-```bash
-install -d -m 0755 /etc/app-deploy
-# app-deploy und die Liste vertrauenswürdiger Pipeline-Commits kommen per
-# tools/fleet-hosts.sh --upgrade <tag> (nach Eintrag des Hosts in fleet/repos.json)
-install -m 0644 deployer/app.conf.example /etc/app-deploy/<app>.conf   # anpassen
-# privates Image: Lese-Login, nur für root
-install -d -m 0700 /etc/app-deploy/docker
-DOCKER_CONFIG=/etc/app-deploy/docker docker login ghcr.io -u <konto>
-```
-
-- systemd-Timer ruft `/usr/local/sbin/app-deploy <app>` auf.
-- Voraussetzungen: `cosign` ≥ v3, `jq`, Docker Compose v2, `flock`.
-- Ohne `/etc/app-deploy/trusted-pipeline` (root, nicht gruppen-/weltbeschreibbar) deployt
-  `app-deploy` nichts.
-- Lokal: `SSH_ORIGINAL_COMMAND=status|rollback|unhold /usr/local/sbin/app-deploy <app>`.
 
 ## Ausnahmen
 

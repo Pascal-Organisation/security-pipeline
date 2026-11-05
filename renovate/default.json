@@ -108,8 +108,7 @@
       "description": "image:tag@sha256 pins inside workflow env/run lines and shell scripts (Dependabot cannot see these).",
       "managerFilePatterns": [
         "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/",
-        "/\\.sh$/",
-        "/(^|/)deployer/app-deploy$/"
+        "/\\.sh$/"
       ],
       "matchStrings": [
         "(?<depName>(?:[a-z0-9.-]+\\.[a-z]{2,}/)?[a-z0-9][a-z0-9._/-]*):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"

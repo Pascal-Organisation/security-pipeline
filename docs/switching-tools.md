@@ -11,7 +11,7 @@ Nur das hier darf ein Repo voraussetzen. Eine Änderung daran ist ein **Major-Re
 |---|---|
 | Pflicht-Check | `Security / security-gate` (Aufrufer-Job heißt `Security`) |
 | `ci.yml`-Inputs | `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert) |
-| `build-container.yml` | Inputs `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert); Workflow-Pfad = Signatur-Identität |
+| `build-container.yml` | Inputs `runner`, `public-runner`, `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert); Workflow-Pfad = Signatur-Identität |
 | Ausnahmen | `.security/exceptions.json` |
 
 Jobnamen wie `SAST (private)` nennen Fähigkeiten, nicht Tools. Niemand sollte sie als Check
@@ -51,8 +51,7 @@ diesen Pfad.
 
 Neue Pipeline-Releases muss der Cluster kennen, bevor ein Aufrufer sie nutzt: erst Tag, dann dessen SHA
 in die `ClusterImagePolicy`-Objekte, dann die Aufrufer (Renovate) anheben. Ein Release aus einem Commit,
-der nicht auf `main` liegt, landet nie in den Policies. (Hosts mit dem Legacy-Agent `app-deploy`:
-`tools/fleet-hosts.sh --upgrade <tag>`.)
+der nicht auf `main` liegt, landet nie in den Policies.
 
 ## Images bauen: `bk`
 
@@ -93,13 +92,12 @@ Automerge ist nur vertretbar, solange `main` und die Tags hier per Ruleset gesch
 
 ## Release
 
-1. `VERSION`, `PIPELINE_VERSION` in `build-container.yml` und `APP_DEPLOY_VERSION` in
-   `deployer/app-deploy` gleich setzen. `self-check` prüft das, auch gegen den Tag.
+1. `VERSION` und `PIPELINE_VERSION` in `build-container.yml` gleich setzen. `self-check` prüft das, auch gegen den Tag.
 2. Toolbox-Digest: `toolbox.yml` auf `main` bauen lassen, den Digest in `TOOLBOX` in `ci.yml` und
    `build-container.yml` eintragen (Renovate tut das nach dem ersten Mal selbst).
 3. Tag und GitHub-Release anlegen.
 4. SHA des Release-Commits in die `ClusterImagePolicy`-Objekte des App-Clusters aufnehmen, danach erst
-   die Aufrufer anheben. Hosts mit dem Legacy-Agent: `tools/fleet-hosts.sh --upgrade <tag>`.
+   die Aufrufer anheben.
 
 ## Ausnahmen
 
@@ -136,4 +134,3 @@ Beide stehen in der Job-Summary. Ins Gate kommen sie erst, wenn die Funde abgear
 |---|---|
 | `tools/fleet-status.sh` | Pin, offene PRs, letzter Lauf, Pflicht-Check pro Repo |
 | `tools/fleet-rulesets.sh [--apply]` | `security-gate` als Pflicht-Check setzen |
-| `tools/fleet-hosts.sh [--upgrade <tag>]` | Legacy: `app-deploy`-Version auf Hosts, die noch keinen Cluster nutzen (über `ssh proxmox`) |
