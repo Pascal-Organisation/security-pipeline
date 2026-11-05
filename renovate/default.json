@@ -140,16 +140,6 @@
         "docker"
       ],
       "groupName": "k3s third-party {{{depName}}} {{{currentValue}}}"
-    },
-    {
-      "description": "Until grouping across apps and policy files is proven on real PRs, k3s image updates are never automerged.",
-      "matchFileNames": [
-        "Homelab-Skripte/k3s-apps/**"
-      ],
-      "matchDatasources": [
-        "docker"
-      ],
-      "automerge": false
     }
   ],
   "customManagers": [
