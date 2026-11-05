@@ -8,7 +8,7 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-2 | Keyless signing in a separate GitHub-hosted job |
 | D-3 | One release workflow carries policy, gate, build and signature |
 | D-4 | Release only from a signed merge commit of a PR on `main` |
-| D-5 | Trust is pinned to release commits of this repository |
+| D-5 | Cluster trusts any commit SHA of `build-container.yml` (identity regex); provenance must name the caller repo + `refs/heads/main` (replaced the release-commit allowlist, 2026-11-05) |
 | D-6 | Signed SBOM and provenance, described honestly as SLSA L1 + signature |
 | D-7 | Dependency-Track reports, it does not gate |
 | D-8 | Strip guessed CPEs from OS packages in the SBOM |
