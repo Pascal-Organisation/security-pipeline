@@ -1,27 +1,30 @@
-# Neues Projekt an die Pipeline anbinden
+# Connecting a new project to the pipeline
 
-Ein neues Repo braucht nur wenige Zeilen: Es ruft die Workflows hier auf und trägt sich in
-`fleet/repos.json` ein. Tools und Regeln bleiben in diesem Repo.
+A new repository needs only a few lines: it calls the workflows here and registers itself in
+`fleet/repos.json`. Tools and rules stay in this repository.
 
-## 1. Profil wählen
+## 1. Pick a profile
 
-| Das Projekt ist … | Profil | Workflows | Vorlage |
+| The project is … | Profile | Workflows | Template |
 |---|---|---|---|
-| nur Code oder Skripte | `ci-only` | `ci` | `homelab`, `anmeldungunihandball` |
-| läuft im App-Cluster, auch als statische Seite | `container-pull` | `ci`, `build-container` | `solar`, `bahnbot` |
-| Shared Hosting ohne eigene Prüfung, privat | `static-ftps` | `ci`, `deploy-static`, `dast` | `websiteghana` |
+| code or scripts only | `ci-only` | `ci` | `homelab`, `anmeldungunihandball` |
+| runs in the app cluster, including a static site | `container-pull` | `ci`, `build-container` | `solar` (public), `bahnbot` (private) |
+| shared hosting that checks nothing itself, private | `static-ftps` | `ci`, `deploy-static`, `dast` | `websiteghana` |
 
-Sichtbarkeit legt die Pipeline selbst fest:
+The pipeline decides by visibility on its own:
 
-| | öffentlich | privat |
+| | Public | Private |
 |---|---|---|
-| Runner | GitHub-hosted, immer | CI-Cluster (`arc-ci`), ein frischer Pod pro Job |
-| SAST | CodeQL (`sast-languages`) | Semgrep, dazu Bandit bei `python-paths` |
-| Signatur | keyless | keyless; der Repo-Name steht im öffentlichen Rekor-Log |
+| Runner | GitHub-hosted, always | CI cluster, a fresh pod per job; one scale set per trust domain |
+| SAST | CodeQL (`sast-languages`) | Semgrep, plus Bandit with `python-paths` |
+| Signature | keyless | keyless; the repo name appears in the public Rekor log |
 
-## 2. Repo anlegen
+A private repository that ships something gets its own scale set and runner group (`arc-<repo>`). Repos
+that only run CI share `arc-ci`. See the homelab repository for how to add a scale set.
 
-- In der Org anlegen, Standard-Branch `main`.
+## 2. Create the repository
+
+- Create it in the org, with default branch `main`.
 - `renovate.json`:
 
   ```json
@@ -31,19 +34,19 @@ Sichtbarkeit legt die Pipeline selbst fest:
   }
   ```
 
-- Dependabot **nicht** zusätzlich einrichten (`.github/dependabot.yml` weglassen).
-- `templates/pre-commit-config.yaml` als `.pre-commit-config.yaml` übernehmen.
-- Öffentliches Repo: `SECURITY.md` anlegen.
+- Do **not** set up Dependabot as well (leave out `.github/dependabot.yml`).
+- Copy `templates/pre-commit-config.yaml` as `.pre-commit-config.yaml`.
+- Public repository: add a `SECURITY.md`.
 
-## 3. CI-Gate einbinden
+## 3. Add the CI gate
 
-Den aktuellen Commit des neuesten Releases holen:
+Get the commit of the latest release:
 
 ```bash
 gh api repos/Pascal-Organisation/security-pipeline/commits/$(cat VERSION) --jq .sha
 ```
 
-`.github/workflows/ci.yml`, passend für jedes Profil:
+`.github/workflows/ci.yml`, suitable for every profile:
 
 ```yaml
 name: CI
@@ -53,7 +56,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "41 4 * * 1" # wöchentlich: ganze Historie auf Secrets, frische CVE-Daten
+    - cron: "41 4 * * 1" # weekly: full history for secrets, fresh CVE data
   workflow_dispatch:
 
 permissions: {}
@@ -64,99 +67,114 @@ concurrency:
 
 jobs:
   security:
-    name: Security # Pflicht: ergibt den Check "Security / security-gate"
+    name: Security # required: produces the check "Security / security-gate"
     uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # vX.Y.Z
     permissions:
       contents: read
       actions: read
       security-events: write
-      packages: read                         # Pflicht ab v3: GitHub-hosted zieht die private ci-toolbox
+      packages: read                         # required since v3: GitHub-hosted pulls the private ci-toolbox
     with:
-      sast-languages: python,actions         # nur öffentlich wirksam
-      python-paths: src                      # nur privat wirksam
-      dockerfile: Dockerfile                 # weglassen, wenn es keins gibt
+      sast-languages: python,actions         # effective for public repos only
+      python-paths: src                      # effective for private repos only
+      dockerfile: Dockerfile                 # omit if there is none
+      # runner: arc-<repo>                   # private repos with their own scale set
 ```
 
-Die `permissions` sind eine Obergrenze und müssen auch für übersprungene Jobs reichen. Der
-Pin mit Versions-Kommentar ist wichtig: Daran erkennt Renovate die Version.
+The `permissions` are an upper bound, and they must also cover skipped jobs. The pin with a version comment
+matters, because that's how Renovate recognises the version.
 
-**Seit v3 (Migration von v2):** Das Paket `ci-toolbox` ist privat. Aufrufer müssen deshalb
-`packages: read` vergeben (Obergrenze für `ci.yml`; `build-container.yml` hat mit `packages: write` schon
-mehr). Ohne das fehlt dem `GITHUB_TOKEN` das Recht zum Pull, und die Jobs scheitern mit `unauthorized`.
-Zusätzlich muss **jedes öffentliche Aufrufer-Repo** (läuft GitHub-hosted) einmalig unter
-`https://github.com/orgs/Pascal-Organisation/packages/container/ci-toolbox/settings` bei **Manage Actions
-access** hinzugefügt werden, Rolle **Read** (nur in der Oberfläche möglich, nicht per API). Private Repos
-laufen im CI-Cluster, dort ist das nicht nötig (der Cluster zieht mit dem Pull-Secret `ghcr-pull`).
-Das Login passiert nur auf GitHub-hosted Runnern, in einem Wegwerf-`DOCKER_CONFIG`, das direkt nach dem
-Pull gelöscht wird.
+**The private toolbox.** The `ci-toolbox` package is private, so callers must grant `packages: read`.
+Without it the `GITHUB_TOKEN` can't pull, and jobs fail with `unauthorized`.
 
-Die Trivy-Prüfung sieht Abhängigkeiten **nur über Lockfiles oder Requirements-Dateien**. Ohne
-eine solche Datei bleibt sie blind, auch wenn das Gate grün ist.
+Additionally, **every public caller** (it runs GitHub-hosted) must be added once under **Manage Actions
+access** with role **Read**, at
+`https://github.com/orgs/Pascal-Organisation/packages/container/ci-toolbox/settings`. This is UI-only, not
+possible via the API.
 
-## 4. Profil-Teil ergänzen
+Private repos run in the CI cluster and don't need that: the cluster pulls with the `ghcr-pull` secret.
+The login happens only on GitHub-hosted runners, in a throwaway `DOCKER_CONFIG` that is deleted right after
+the pull.
 
-Am besten von der Vorlage aus der Tabelle kopieren.
+Trivy sees dependencies **only through lock files or requirements files**. Without one it is blind, even if
+the gate is green.
+
+## 4. Add the profile part
+
+It's easiest to copy from the template in the table.
 
 ### Container (`container-pull`)
 
-`release.yml` wie in `solar`: bei Push auf `main` `build-container` aufrufen. Permissions: `contents:
-read`, `actions: read`, `security-events: write`, `pull-requests: read`, `packages: write`, `id-token:
-write`. Öffentliche Repos brauchen zusätzlich Zugriff auf das Paket `ci-toolbox` (siehe Abschnitt 3). Das Gate läuft darin, es muss nicht extra aufgerufen werden. Im App-Cluster:
+`release.yml` as in `solar`: on push to `main`, call `build-container`. The gate runs inside it, so don't
+call it separately.
 
-- Deployment/Service/Ingress als Manifest im App-Cluster-Repo anlegen, Secrets liegen im Cluster.
-- `ClusterImagePolicy` für `ghcr.io/pascal-organisation/<repo>`: verlangt die Signatur von
-  `build-container.yml@<sha>` (Release-Commits der Pipeline, Issuer GitHub-OIDC, Repo, `refs/heads/main`)
-  und die Attestations. Ohne passende Policy startet der Pod nicht; bei jedem Pipeline-Release kommt dessen
-  SHA zu den Policies dazu.
-- Der Cluster braucht Lesezugriff auf das Image: **öffentliche Repos** stellen das Paket nach dem ersten
-  Release öffentlich (`https://github.com/orgs/Pascal-Organisation/packages/container/<repo>/settings`),
-  **private Repos** bekommen ein Pull-Secret im Namespace. Sonst meldet der Cluster `ImagePullBackOff`,
-  während die Release-Pipeline grün bleibt.
+Permissions for the job that calls `build-container`:
+- `contents: read`, `actions: read`, `security-events: write`;
+- `pull-requests: read`, `packages: write`, `id-token: write`.
 
-### Shared Hosting (`static-ftps`)
+If the release workflow also calls the repo's own `ci.yml` (for tests), that job needs `packages: read`
+too. Otherwise the run ends in **`startup_failure`**, because a nested job asks for more than its caller
+grants.
 
-- Eigener Build-Job lädt das Artefakt `site` mit der Datei `site.tgz` hoch.
-- Secrets `FTP_HOST`, `FTP_USER`, `FTP_PASS`; es wird nie gelöscht.
-- `dast.yml` nach dem Deploy aufrufen (oder vorher gegen Staging), nur gegen eigene Seiten.
+In the app cluster (homelab repository, `Homelab-Skripte/k3s-apps/`):
 
-## Regel: Kein Deploy ohne grünes Gate
+- Add Deployment and Service as a manifest. Secrets live in the cluster.
+- Add a `ClusterImagePolicy` for `ghcr.io/pascal-organisation/<repo>`. It demands the signature of
+  `build-container.yml@<sha>` (release commits of the pipeline, GitHub OIDC issuer, repository,
+  `refs/heads/main`) and the attestations. Without a matching policy the pod does not start.
+- Add an updater CronJob, if new builds should roll out by themselves.
+- The cluster needs read access to the image:
+  - **public repos** make the package public after the first release;
+  - **private repos** get a pull secret in the namespace.
+  - Without it the cluster reports `ImagePullBackOff` while the release pipeline stays green.
 
-Das gilt für jedes deployende Repo, auch privat. Der GitHub-Free-Plan kann in privaten Repos keinen
-Merge blockieren, die Pipeline aber das Release:
+### Shared hosting (`static-ftps`)
 
-- **`container-pull`:** Das Gate läuft in `build-container.yml`, und die Admission im Cluster akzeptiert
-  nur dessen Signatur. Ein Repo kann das nicht umgehen, auch nicht durch Ändern seines eigenen Workflows.
-- **`static-ftps`:** `deploy-static.yml` prüft vor dem Upload selbst Gate und `main`. Das Ziel prüft
-  nichts, deshalb hilft hier nur diese Prüfung. Wer den Workflow im Repo ändert, kommt daran vorbei.
+- Your own build job uploads the artifact `site` with the file `site.tgz`.
+- Secrets `FTP_HOST`, `FTP_USER`, `FTP_PASS`. Nothing is ever deleted.
+- Call `dast.yml` after the deploy (or before it, against staging), and only against your own sites.
 
-## 5. In die Flotte eintragen
+## Rule: no deployment without a green gate
 
-`fleet/repos.json` per PR ergänzen:
+This holds for every deploying repository, private ones included. GitHub Free can't block a merge in a
+private repository, but the pipeline can block the release:
+
+- **`container-pull`:** the gate runs inside `build-container.yml`, and cluster admission accepts only that
+  workflow's signature. A repository can't get around this, not even by editing its own workflow.
+- **`static-ftps`:** `deploy-static.yml` checks the gate and `main` itself before uploading. The target
+  checks nothing, so this check is the only protection, and anyone who edits the workflow in the repo can
+  get past it. That is stated openly.
+
+## 5. Register in the fleet
+
+Add it to `fleet/repos.json` via PR:
 
 ```json
-{ "name": "mein-projekt", "profile": "ci-only", "ring": "stable", "gate_check": "Security / security-gate" }
+{ "name": "my-project", "profile": "ci-only", "ring": "stable", "gate_check": "Security / security-gate" }
 ```
 
-Abweichungen vom Standard mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.json` vorbehalten.
+Note deviations from the standard with `"note"`. `canary` is reserved for the two repositories named in
+`renovate/default.json`.
 
-## 6. Prüfen und scharf schalten
+## 6. Verify and switch on
 
-1. PR im neuen Repo: `Security / security-gate` muss grün sein.
-2. Ersten Release abwarten: Policy, Gate, Build und Signatur müssen grün sein.
-3. `tools/fleet-status.sh` zeigt das Repo mit aktuellem Pin.
-4. Öffentliches Repo: `tools/fleet-rulesets.sh`, Ausgabe lesen, dann `--apply`. Private Repos
-   lassen sich im GitHub-Free-Plan nicht schützen; das Gate meldet dort nur.
-5. Container: im Cluster prüfen, dass der Pod mit dem neuen Digest läuft. Grün in GitHub heißt noch nicht,
-   dass er angekommen ist.
+1. PR in the new repository: `Security / security-gate` must be green.
+2. Wait for the first release: policy, gate, build and signature must be green.
+3. `tools/fleet-status.sh` shows the repository with its current pin.
+4. Public repository: run `tools/fleet-rulesets.sh`, read the output, then `--apply`. Private repos can't be
+   protected on GitHub Free; there the gate only reports.
+5. Container: check in the cluster that the pod runs the new digest. Green in GitHub doesn't mean it has
+   arrived.
 
-## Stolperfallen
+## Pitfalls
 
-- **Repo umbenennen oder verschieben** ändert Image-Pfad und Signatur-Identität. Die
-  `ClusterImagePolicy` muss mit umziehen, sonst lehnt die Admission das neue Image ab (oder der Cluster
-  bleibt auf der alten Version).
-- **Der Aufrufer-Job muss `Security` heißen**, sonst stimmt der Pflicht-Check nicht.
-- **Keine Tool-Namen voraussetzen:** weder im Workflow noch in Rulesets, sondern nur
-  `security-gate`. Sonst bricht der nächste Tool-Tausch das Repo
-  ([switching-tools.md](switching-tools.md)).
-- **Ausnahmen** nur über `.security/exceptions.json`, immer mit Begründung und Ablaufdatum.
-- **Eigene Tests** gehören als eigene Jobs ins Repo, die Sicherheits-Gates nicht.
+- **Renaming or moving a repository** changes the image path and the signing identity. The
+  `ClusterImagePolicy` has to move too. Otherwise admission rejects the new image, or the cluster stays on
+  the old version.
+- **The caller job must be named `Security`**, or the required check doesn't match.
+- **Don't depend on tool names**, neither in workflows nor in rulesets, only on `security-gate`. Otherwise
+  the next tool swap breaks the repository ([switching-tools.md](switching-tools.md)).
+- **Exceptions** only through `.security/exceptions.json`, always with a reason and an expiry date.
+- **Your own tests** belong in the repository as separate jobs. The security gates don't.
+- **Your own Dockerfile tests** in a private repo: there is no Docker daemon on the CI cluster. Use `bk` from
+  the toolbox (see [switching-tools.md](switching-tools.md#building-images-bk)).

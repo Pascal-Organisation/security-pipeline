@@ -1,107 +1,111 @@
-# Tools austauschen
+# Swapping tools, releasing the pipeline
 
-Ziel: Ein Scanner, ein Signier-Verfahren oder eine Regel wird **hier** getauscht. Die Repos
-merken davon nichts, außer einem Pin-Update durch Renovate.
+The goal: a scanner, a signing method or a rule is swapped **here**. The repositories notice nothing, apart
+from a pin update by Renovate.
 
-## Der Vertrag (was Repos von der Pipeline kennen)
+## The contract (what repositories know about the pipeline)
 
-Nur das hier darf ein Repo voraussetzen. Eine Änderung daran ist ein **Major-Release**.
+Repositories may depend on these things only. Changing any of them is a **major release**.
 
-| Vertrag | Wert |
+| Contract | Value |
 |---|---|
-| Pflicht-Check | `Security / security-gate` (Aufrufer-Job heißt `Security`) |
-| `ci.yml`-Inputs | `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert) |
-| `build-container.yml` | Inputs `runner`, `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert); Workflow-Pfad = Signatur-Identität |
-| Ausnahmen | `.security/exceptions.json` |
+| Required check | `Security / security-gate` (the caller job is named `Security`) |
+| `ci.yml` inputs | `runner`, `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` (`private-runner`: deprecated, ignored) |
+| `build-container.yml` | inputs `runner`, `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs` (`private-runner`: deprecated, ignored); **the workflow path is the signing identity** |
+| Exceptions | `.security/exceptions.json` |
 
-Jobnamen wie `SAST (private)` nennen Fähigkeiten, nicht Tools. Niemand sollte sie als Check
-voraussetzen; es zählt nur `security-gate`.
+Job names like `SAST (private)` name capabilities, not tools. Nobody should depend on them as a check; only
+`security-gate` counts.
 
-## Ablauf: ein Tool ersetzen
+## Procedure: replacing a tool
 
-Beispiel: Trivy durch etwas anderes ersetzen. Seit v3 steckt jedes Tool im Image `ci-toolbox`
-(`toolbox/Dockerfile`): Ein neues Tool kommt zuerst dort hinein (per Digest gepinnt aus seinem offiziellen
-Image), `toolbox.yml` baut und signiert die neue Toolbox, danach wird der Digest in `TOOLBOX`
-(`ci.yml` und `build-container.yml`) angehoben. Aufgerufen wird es in den Workflows über `tb <tool>`.
+Example: replace Trivy with something else. Since v3 every tool lives in the `ci-toolbox` image
+(`toolbox/Dockerfile`):
 
-1. **Testen:** Neuer Job in `ci.yml`, der nur berichtet und immer grün endet, **nicht** in den
-   `needs` von `security-gate`. Kein `continue-on-error`: Der rote Check würde Renovates
-   Automerge aufhalten. Release als Minor. Die Ringe rollen es aus, nichts blockiert.
-2. **Vergleichen:** Ein bis zwei Releases lang Funde beider Tools ansehen,
-   `tools/fleet-status.sh` zeigt den Stand.
-3. **Umschalten:** Neuen Job in `needs` aufnehmen, Fund als Fehler werten, alten Job
-   löschen. Ausnahmen im selben Commit auf den neuen Scanner übersetzen. Release als Minor,
-   solange der Vertrag gleich bleibt.
+- A new tool goes in there first, pinned by digest from its official image.
+- `toolbox.yml` builds and signs the new toolbox.
+- Then the digest in `TOOLBOX` (`ci.yml` and `build-container.yml`) is raised.
+- The workflows call it through `tb <tool>`.
 
-Kein Aufrufer ändert sich. Bricht der Vertrag doch (neuer Input, neues Secret), ist es ein
-Major: Renovate merged das nicht selbst.
+1. **Trial:** add a new job to `ci.yml` that only reports and always ends green. Keep it **out of** the
+   `needs` of `security-gate`. Don't use `continue-on-error`: the red check would stop Renovate's automerge.
+   Release as a minor. The rings roll it out, and nothing blocks.
+2. **Compare:** look at both tools' findings for one or two releases. `tools/fleet-status.sh` shows the state.
+3. **Switch:** add the new job to `needs`, treat its findings as errors, and delete the old job. Translate
+   the exceptions to the new scanner in the same commit. Release as a minor, as long as the contract stays
+   the same.
 
-## Ablauf: Signieren oder Verifizieren ändern
+No caller changes. If the contract does break (a new input, a new secret), it's a major, and Renovate does
+not merge it by itself.
 
-Hier hängt zusätzlich die Admission im Cluster dran, deshalb mit Überlappung:
+## Procedure: changing signing or verification
 
-1. In den `ClusterImagePolicy`-Objekten beide Identitäten erlauben (je ein `authorities`-Eintrag mit
-   `identities`, `issuer` GitHub-OIDC und `subjectRegExp` auf `…/alt.yml@<sha>` bzw. `…/neu.yml@<sha>`),
-   beide auf Release-Commits gepinnt.
-2. Pipeline umstellen, releasen, einen Deploy abwarten.
-3. Die alte Identität aus den Policies entfernen.
+Cluster admission depends on this as well, so do it with an overlap:
 
-`build-container.yml` nicht umbenennen oder verschieben, ohne Schritt 1: Die Policies erlauben genau
-diesen Pfad.
+1. In the `ClusterImagePolicy` objects, allow both identities. Use one `authorities` entry each, with
+   `identities`, issuer GitHub OIDC and `subjectRegExp` on `…/old.yml@<sha>` and `…/new.yml@<sha>`, both
+   pinned to release commits.
+2. Switch the pipeline, release, and wait for one deployment.
+3. Remove the old identity from the policies.
 
-Neue Pipeline-Releases muss der Cluster kennen, bevor ein Aufrufer sie nutzt: erst Tag, dann dessen SHA
-in die `ClusterImagePolicy`-Objekte, dann die Aufrufer (Renovate) anheben. Ein Release aus einem Commit,
-der nicht auf `main` liegt, landet nie in den Policies.
+Don't rename or move `build-container.yml` without step 1: the policies allow exactly this path.
 
-## Images bauen: `bk`
+## Building images: `bk`
 
-`bk` (in der Toolbox, `toolbox/bk` → `/usr/local/bin/bk`) baut **eine Stufe** eines Dockerfiles mit rootless
-BuildKit, ohne Docker-Daemon. Aufrufer-Repos brauchen keinen eigenen Hilfs-Wrapper mehr:
+`bk` (in the toolbox, `toolbox/bk` → `/usr/local/bin/bk`) builds **one stage** of a Dockerfile with rootless
+BuildKit, without a Docker daemon. Caller repositories don't need their own wrapper:
 
 ```sh
-bk [<stage>] [-C <context>] [-f <dockerfile>] [--build-arg K=V]... [weitere buildctl-Argumente]
+bk [<stage>] [-C <context>] [-f <dockerfile>] [--build-arg K=V]... [further buildctl arguments]
 ```
 
-- Ohne `--output` wird nur gebaut (geprüft), nichts exportiert; ein fehlschlagender `RUN`-Schritt lässt die
-  Stufe scheitern. Für ein Image: `--output type=oci,dest=$RUNNER_TEMP/image.tar`.
-- Alles Unbekannte geht unverändert an `buildctl build` (`--opt label:k=v`, `--no-cache`, ...).
-- BuildKit-Zustand und Socket liegen unter `$RUNNER_TEMP` (`--root`, `--otel-socket-path`), pro Job neu;
-  Base-Images werden immer aus der Registry aufgelöst.
-- **Der Prozess-Sandbox von BuildKit bleibt an**; `--oci-worker-no-process-sandbox` wird nicht benutzt. Jeder
-  `RUN`-Schritt bekommt dann einen eigenen PID-Namespace und ein frisches `/proc`. Das setzt voraus:
-  im Cluster `procMount: Unmasked` (Pod mit `hostUsers: false`), auf GitHub-hosted Runnern
-  `docker run --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined`.
-  Ohne `systempaths=unconfined` überdecken Dockers maskierte `/proc`-Pfade das äußere `/proc`, und der Kernel
-  verweigert runc das Mounten eines neuen (`error mounting "proc"`).
-- Auf GitHub-hosted Runnern läuft es über den Wrapper `tb` (`tb bk runtime ...`), im Cluster direkt (`bk runtime ...`).
-  Dort muss der Wrapper `RUNNER_TEMP` in den Container durchreichen, sonst landet der Zustand in `/tmp`.
-- `build-container.yml` benutzt `bk` selbst; ein neuer `bk`-Stand erreicht Aufrufer und Workflows erst, wenn
-  das neu gebaute Toolbox-Image als `TOOLBOX`-Digest gepinnt ist (ci.yml und build-container.yml, Cluster-Values).
+- **Output:** without `--output` it only builds (as a check) and exports nothing. A failing `RUN` step fails
+  the stage. For an image: `--output type=oci,dest=$RUNNER_TEMP/image.tar`.
+- **Other arguments:** anything unknown goes to `buildctl build` unchanged (`--opt label:k=v`, `--no-cache`, …).
+- **State:** BuildKit state and socket live under `$RUNNER_TEMP` (`--root`, `--otel-socket-path`), fresh per
+  job. Base images are always resolved from the registry.
+- **BuildKit's process sandbox stays on.** `--oci-worker-no-process-sandbox` is not used. Every `RUN` step
+  gets its own PID namespace and a fresh `/proc`, which needs `procMount: Unmasked` in the cluster (pod with
+  `hostUsers: false`).
+- **Where `bk` works:** it is meant for the **CI cluster**, where it runs directly (`bk runtime …`). On
+  GitHub-hosted Ubuntu 24.04 it does **not** work: AppArmor restricts unprivileged user namespaces on the
+  host, so rootlesskit can't start. Public repositories are built by `build-container.yml`'s buildx path
+  instead, and their own Dockerfile tests can use the Docker that GitHub's VM provides.
+- **Rollout:** `build-container.yml` uses `bk` itself. A new `bk` version reaches callers and workflows only
+  once the rebuilt toolbox image is pinned as the `TOOLBOX` digest (in `ci.yml` and `build-container.yml`,
+  and in the cluster values).
 
-## Rollout-Ringe
+## Rollout rings
 
-| Ring | Repos | Wann |
+| Ring | Repositories | When |
 |---|---|---|
-| `canary` | `workingrepo` (privat), `anmeldungunihandball` (öffentlich) | sofort |
-| `stable` | alle anderen | 3 Tage nach dem Release |
+| `canary` | `workingrepo` (private), `anmeldungunihandball` (public) | immediately |
+| `stable` | all others | 3 days after the release |
 
-Festgelegt in `renovate/default.json`, gespiegelt in `fleet/repos.json`. Minor und Patch
-merged Renovate selbst, sobald alles grün ist. Majors immer von Hand. Commit-SHA-Pins bleiben.
-Automerge ist nur vertretbar, solange `main` und die Tags hier per Ruleset geschützt sind
+The rings are set in `renovate/default.json` and mirrored in `fleet/repos.json`. Renovate merges minor and
+patch updates itself once everything is green; majors are always done by hand. Commit-SHA pins stay.
+Automerge is acceptable only as long as `main` and the tags here are protected by a ruleset
 (`tools/fleet-rulesets.sh`).
 
-## Release
+## Releasing the pipeline
 
-1. `VERSION` und `PIPELINE_VERSION` in `build-container.yml` gleich setzen. `self-check` prüft das, auch gegen den Tag.
-2. Toolbox-Digest: `toolbox.yml` auf `main` bauen lassen, den Digest in `TOOLBOX` in `ci.yml` und
-   `build-container.yml` eintragen (Renovate tut das nach dem ersten Mal selbst).
-3. Tag und GitHub-Release anlegen.
-4. SHA des Release-Commits in die `ClusterImagePolicy`-Objekte des App-Clusters aufnehmen, danach erst
-   die Aufrufer anheben.
+1. Set `VERSION` and `PIPELINE_VERSION` in `build-container.yml` to the same value. `self-check` enforces
+   that, also against the tag.
+2. Toolbox digest: let `toolbox.yml` build on `main`, and put the digest into `TOOLBOX` in `ci.yml` and
+   `build-container.yml`. After the first time, Renovate does this by itself.
+3. Merge the PR, then create a **signed tag** on the release commit (`git tag -s vX.Y.Z <sha>`), and
+   optionally a GitHub release.
+4. Add the release commit's SHA to the app cluster's `ClusterImagePolicy` objects and apply them. The homelab
+   repository's `k3s-apps/pin-pipeline-release.sh` prepares the edit.
+5. Only then raise the callers. A release from a commit that is not on `main` never goes into the policies.
 
-## Ausnahmen
+**The order is load-bearing.** If a caller moves before step 4, its next image is signed by a workflow ref
+the cluster doesn't trust, and admission rejects it. That is safe, because the old pod keeps running, but
+the release is wasted.
 
-`.security/exceptions.json` im jeweiligen Repo, die Pipeline übersetzt sie für den Scanner:
+## Exceptions
+
+`.security/exceptions.json` in the repository. The pipeline translates it for the scanner:
 
 ```json
 {
@@ -109,28 +113,28 @@ Automerge ist nur vertretbar, solange `main` und die Tags hier per Ruleset gesch
     {
       "id": "CVE-2026-12345",
       "kind": "vulnerability",
-      "reason": "Betroffene Funktion wird nicht aufgerufen",
+      "reason": "The affected function is never called",
       "expires": "2027-01-31"
     }
   ]
 }
 ```
 
-`kind` ist `vulnerability` (Standard), `misconfiguration`, `secret` oder `license`.
-`reason` und `expires` sind Pflicht; nach Ablauf blockiert der Fund wieder.
+`kind` is `vulnerability` (the default), `misconfiguration`, `secret` or `license`. `reason` and `expires`
+are mandatory; after the expiry the finding blocks again. Exceptions apply per check ID, not per file.
 
-## Laufende Tests
+## Running trials
 
-| Job | Zweck | Status |
+| Job | Purpose | Status |
 |---|---|---|
-| `Shell lint (trial)` | shellcheck über alle `.sh`-Dateien | berichtet nur, Bestandsfunde zuerst ansehen |
-| `Runtime images (trial)` | Trivy über die in Compose-Dateien genannten Images | berichtet nur |
+| `Shell lint (trial)` | shellcheck over every `.sh` file | reports only; review existing findings first |
+| `Runtime images (trial)` | Trivy over the images named in compose files | reports only |
 
-Beide stehen in der Job-Summary. Ins Gate kommen sie erst, wenn die Funde abgearbeitet sind.
+Both appear in the job summary. They join the gate only once their findings are worked off.
 
-## Überblick und Betrieb
+## Overview and operations
 
-| Befehl | Zweck |
+| Command | Purpose |
 |---|---|
-| `tools/fleet-status.sh` | Pin, offene PRs, letzter Lauf, Pflicht-Check pro Repo |
-| `tools/fleet-rulesets.sh [--apply]` | `security-gate` als Pflicht-Check setzen |
+| `tools/fleet-status.sh` | pin, open PRs, last run and required check per repository |
+| `tools/fleet-rulesets.sh [--apply]` | set `security-gate` as a required check |
