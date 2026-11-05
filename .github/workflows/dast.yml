@@ -35,7 +35,7 @@ on:
 permissions: {}
 
 env:
-  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.16.1@sha256:7840969c7c9fead565bf9734b12f49f6886db90b1d35b1f74d79710bbd081dab
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
   # Templates pinned to a release instead of "whatever is newest at scan time".
   NUCLEI_TEMPLATES_REF: "v10.5.1"
   NUCLEI_TEMPLATES_SHA: 79fb682760ab3d5b0e22afbb44709353cbebf023
