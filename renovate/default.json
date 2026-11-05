@@ -130,6 +130,26 @@
         "digest"
       ],
       "enabled": false
+    },
+    {
+      "description": "Homelab third-party images: the image: line in apps/*.yaml and the ClusterImagePolicy glob must change together, or the admission policy denies the new digest. One branch per image and current tag, covering both files.",
+      "matchFileNames": [
+        "Homelab-Skripte/k3s-apps/**"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "groupName": "k3s third-party {{{depName}}} {{{currentValue}}}"
+    },
+    {
+      "description": "Until grouping across apps and policy files is proven on real PRs, k3s image updates are never automerged.",
+      "matchFileNames": [
+        "Homelab-Skripte/k3s-apps/**"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "automerge": false
     }
   ],
   "customManagers": [
@@ -170,6 +190,18 @@
       ],
       "datasourceTemplate": "docker",
       "autoReplaceStringTemplate": "image: {{depName}}@{{newDigest}}  # {{newValue}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Homelab ClusterImagePolicy globs: glob: \"<registry>/<image>@sha256:...\"  # <version>. Same dependency as the image: line in apps/*.yaml (depName normalised: index.docker.io/ and library/ dropped), so both files move in one PR.",
+      "managerFilePatterns": [
+        "/(^|/)Homelab-Skripte/k3s-apps/policies/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "glob: \"(?<prefix>index\\.docker\\.io/(?:library/)?)?(?<depName>[a-z0-9][a-z0-9._/-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s+# (?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)"
+      ],
+      "datasourceTemplate": "docker",
+      "autoReplaceStringTemplate": "glob: \"{{{prefix}}}{{depName}}@{{newDigest}}\"  # {{newValue}}"
     }
   ],
   "git-submodules": {
