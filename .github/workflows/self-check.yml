@@ -1,5 +1,5 @@
 ## This repo runs its own CI gate on itself (dogfooding), plus shellcheck for the
-## host-side deployer. Public repo -> GitHub-hosted runners only.
+## tools/ scripts. Public repo -> GitHub-hosted runners only.
 name: Self-check
 
 on:
@@ -29,7 +29,7 @@ jobs:
       sast-languages: actions
 
   shellcheck:
-    name: shellcheck (deployer, tools)
+    name: shellcheck (tools)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: shellcheck --severity=warning deployer/app-deploy tools/*.sh
+      - run: shellcheck --severity=warning tools/*.sh
 
   consistency:
     name: Version & manifest consistency
@@ -51,7 +51,7 @@ jobs:
         with:
           persist-credentials: false
       # Provenance and hosts report these strings, so they must never drift from the tag.
-      - name: VERSION, build-container.yml, app-deploy and the tag agree
+      - name: VERSION, build-container.yml and the tag agree
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
@@ -59,8 +59,6 @@ jobs:
           v="$(cat VERSION)"
           grep -qxF "  PIPELINE_VERSION: $v" .github/workflows/build-container.yml \
             || { echo "::error::build-container.yml PIPELINE_VERSION differs from VERSION ($v)"; exit 1; }
-          grep -qxF "APP_DEPLOY_VERSION=\"$v\"" deployer/app-deploy \
-            || { echo "::error::app-deploy version differs from VERSION ($v)"; exit 1; }
           if [ "$REF_TYPE" = tag ] && [ "$REF_NAME" != "$v" ]; then
             echo "::error::tag $REF_NAME differs from VERSION ($v)"; exit 1
           fi

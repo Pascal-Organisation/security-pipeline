@@ -113,8 +113,6 @@ write`. Öffentliche Repos brauchen zusätzlich Zugriff auf das Paket `ci-toolbo
   **private Repos** bekommen ein Pull-Secret im Namespace. Sonst meldet der Cluster `ImagePullBackOff`,
   während die Release-Pipeline grün bleibt.
 
-Der Host-Agent `app-deploy` ist abgelöst und nur noch für Hosts außerhalb des Clusters da (siehe README).
-
 ### Shared Hosting (`static-ftps`)
 
 - Eigener Build-Job lädt das Artefakt `site` mit der Datei `site.tgz` hoch.
@@ -139,8 +137,7 @@ Merge blockieren, die Pipeline aber das Release:
 { "name": "mein-projekt", "profile": "ci-only", "ring": "stable", "gate_check": "Security / security-gate" }
 ```
 
-Container zusätzlich mit `"ct": 132, "app": "solar", "deployer": "app-deploy"`, Abweichungen vom
-Standard mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.json` vorbehalten.
+Abweichungen vom Standard mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.json` vorbehalten.
 
 ## 6. Prüfen und scharf schalten
 
@@ -150,7 +147,7 @@ Standard mit `"note"`. `canary` bleibt den beiden Repos in `renovate/default.jso
 4. Öffentliches Repo: `tools/fleet-rulesets.sh`, Ausgabe lesen, dann `--apply`. Private Repos
    lassen sich im GitHub-Free-Plan nicht schützen; das Gate meldet dort nur.
 5. Container: im Cluster prüfen, dass der Pod mit dem neuen Digest läuft. Grün in GitHub heißt noch nicht,
-   dass er angekommen ist (bei Hosts mit `app-deploy`: `tools/fleet-hosts.sh`).
+   dass er angekommen ist.
 
 ## Stolperfallen
 

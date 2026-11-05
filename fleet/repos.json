@@ -29,10 +29,7 @@
       "name": "pascalhaag-website",
       "profile": "container-pull",
       "ring": "stable",
-      "gate_check": "Security / security-gate",
-      "ct": 107,
-      "deployer": "app-deploy",
-      "app": "hugo-site"
+      "gate_check": "Security / security-gate"
     },
     {
       "name": "websiteghana",
@@ -46,21 +43,15 @@
       "profile": "container-pull",
       "ring": "stable",
       "gate_check": "Security / security-gate",
-      "ct": 132,
-      "deployer": "app-deploy",
       "extra_required_checks": [
         "Lint & test"
-      ],
-      "app": "solar"
+      ]
     },
     {
       "name": "bahnbot",
       "profile": "container-pull",
       "ring": "stable",
-      "gate_check": "Security / security-gate",
-      "ct": 112,
-      "deployer": "app-deploy",
-      "app": "bahnbot"
+      "gate_check": "Security / security-gate"
     },
     {
       "name": "security-pipeline",
