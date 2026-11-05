@@ -11,7 +11,7 @@ Nur das hier darf ein Repo voraussetzen. Eine Änderung daran ist ein **Major-Re
 |---|---|
 | Pflicht-Check | `Security / security-gate` (Aufrufer-Job heißt `Security`) |
 | `ci.yml`-Inputs | `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert) |
-| `build-container.yml` | Inputs `runner`, `public-runner`, `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert); Workflow-Pfad = Signatur-Identität |
+| `build-container.yml` | Inputs `runner`, `context`, `dockerfile`, `target`, `submodules`, `sast-languages`, `python-paths`, `scan-skip-dirs` (`private-runner`: veraltet, wird ignoriert); Workflow-Pfad = Signatur-Identität |
 | Ausnahmen | `.security/exceptions.json` |
 
 Jobnamen wie `SAST (private)` nennen Fähigkeiten, nicht Tools. Niemand sollte sie als Check

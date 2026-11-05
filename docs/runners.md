@@ -91,8 +91,7 @@ nie, sie bekommen nur eine Just-in-time-Registrierung für genau einen Job.
 Private Repos laufen auf dem Scale Set `arc-ci` (`runs-on` = Name des Scale Sets). `ci.yml` und
 `build-container.yml` haben dafür den Input `runner` (Standard `arc-ci`); wer ein anderes Scale Set
 ausprobiert (z. B. `k8s-ci-trial`), setzt ihn im Aufrufer. Öffentliche Repos ignorieren ihn und laufen
-immer auf GitHub-hosted Runnern, außer das Repo setzt den Opt-in-Input `public-runner` von
-`build-container.yml` (nur Build-Job, nur mit einer auf dieses Repo beschränkten Runner-Gruppe; siehe README).
+immer auf GitHub-hosted Runnern.
 
 ### Stolpersteine beim Aufbau
 
@@ -158,6 +157,4 @@ Alles gepinnt; Images per Digest (siehe `runners/arc/`).
 
 Die Org-Runner-Gruppe lässt öffentliche Repos nicht zu, und `ci.yml` liest die Sichtbarkeit aus der
 API und schickt öffentliche Repos immer auf GitHub-hosted Runner. Ein Fork-PR erreicht die eigenen
-Runner also auf zwei unabhängigen Wegen nicht. Der Build-Job eines öffentlichen Repos läuft nur mit dem Opt-in `public-runner` auf einem eigenen Scale Set
-(Runner-Gruppe auf genau dieses Repo beschränkt; `build-container.yml` läuft nur auf `main` nach der
-Release-Policy). Signiert wird in jedem Fall GitHub-hosted.
+Runner also auf zwei unabhängigen Wegen nicht. Signiert wird in jedem Fall GitHub-hosted.

@@ -2,7 +2,7 @@
 ##
 ##   policy : the commit is on main, GitHub-verified, and the merge result of a PR
 ##   gate   : ci.yml, the same security-gate as on pull requests
-##   build  : image tar (BuildKit, rootless; GitHub-hosted starts the toolbox with docker run) -> Trivy image gate on the
+##   build  : image tar (BuildKit v0.34.2: rootless `bk` in the CI cluster, buildx on GitHub-hosted) -> Trivy image gate on the
 ##            tar -> Syft SBOM (CycloneDX) from the tar -> crane pushes THAT tar to GHCR
 ##            -> SLSA v1 provenance predicate for the pushed digest
 ##   sign   : keyless Cosign (GitHub OIDC -> Fulcio, logged in Rekor), on a GitHub-hosted runner
@@ -17,15 +17,14 @@
 ##
 ## The image that is pushed is byte-for-byte what Trivy scanned: BuildKit writes an OCI tar, Trivy and
 ## Syft read it, crane pushes it (unpacked, never re-built or re-tagged by a daemon) and the digest crane
-## reports must equal the manifest digest inside that tar. No Docker daemon builds or pushes anything (v3).
+## reports must equal the manifest digest inside that tar. On our own machines no Docker daemon builds or pushes
+## anything (v3); only on GitHub's throwaway VMs does the VM's own Docker host the BuildKit builder.
 ## The signing job runs no third-party scanner and no repo code.
 ## Private repos build in the CI cluster (scale set "arc-ci": fresh pod per job, user namespaces, not
 ## privileged; the pod is the ci-toolbox and runs BuildKit rootless, in-process); public repos on
-## GitHub-hosted runners by default, where the same toolbox image is started with `docker run` (see ci.yml,
-## `tb`). A public repo can opt in to a self-hosted scale set for the build job only (input `public-runner`,
-## needed because rootless BuildKit fails on hosted Ubuntu 24.04, which restricts unprivileged user
-## namespaces via AppArmor). That is safe only with a runner group restricted to that single repo: this
-## workflow runs solely on refs/heads/main after the policy check, so fork PR code never reaches it.
+## GitHub-hosted runners (owner rule: CI of public repos never runs on self-hosted machines). There the toolbox
+## image is started with `docker run` (see ci.yml, `tb`), and the image is built by a buildx builder with the same
+## BuildKit release, because hosted Ubuntu 24.04 blocks the user namespaces rootless BuildKit needs.
 ##
 ## Outputs image + digest.
 name: build-container (reusable)
@@ -38,13 +37,9 @@ on:
         type: string
         default: ""
       runner:
-        description: "Runner scale set (label) for PRIVATE repos. Default is the production CI cluster; only set it to try another scale set. Public repos ignore it (see public-runner)."
+        description: "Runner scale set (label) for PRIVATE repos. Default is the production CI cluster; only set it to try another scale set. Public repos ignore it and always run GitHub-hosted."
         type: string
         default: "arc-ci"
-      public-runner:
-        description: "Runner label for the BUILD job of a PUBLIC repo; empty = GitHub-hosted (ubuntu-24.04). Opt-in, e.g. a dedicated ARC scale set whose runner group is restricted to that one repo. Safe because build-container runs only on refs/heads/main after the release-policy check, so fork PR code never reaches it. Gate, sign and dtrack jobs stay GitHub-hosted either way."
-        type: string
-        default: ""
       context:
         type: string
         default: "."
@@ -137,9 +132,7 @@ jobs:
   build:
     name: Build, scan, SBOM, push
     needs: gate
-    # private -> inputs.runner; public -> inputs.public-runner if set, else GitHub-hosted. The inner
-    # `X != '' && X || default` is safe: when X is '' the condition is false, so the default is taken.
-    runs-on: ${{ needs.gate.outputs.private == 'true' && inputs.runner || (inputs.public-runner != '' && inputs.public-runner || 'ubuntu-24.04') }}
+    runs-on: ${{ needs.gate.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -161,7 +154,7 @@ jobs:
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
 
       # `tb <tool> ...`: see ci.yml. Here the wrapper also passes RUNNER_TEMP (state directory of `bk`) and
-      # takes extra `docker run` options in TB_RUN_OPTS (GitHub-hosted only; any ARC pod, private or public, ignores them).
+      # takes extra `docker run` options in TB_RUN_OPTS (GitHub-hosted only; the CI cluster ignores them).
       - name: Toolbox
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -202,21 +195,38 @@ jobs:
           # image not built strictly later than the one running (replay protection).
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           source="https://github.com/$GITHUB_REPOSITORY"
-          # `bk` (toolbox): rootless BuildKit, started in-process by buildctl-daemonless.sh: no long-running daemon,
-          # no root, a fresh state directory per job (so no cache from other jobs) and image-resolve-mode=pull, so
-          # base images are always resolved from the registry. BuildKit's process sandbox stays on: the cluster pod
-          # has procMount Unmasked, and the docker run below systempaths=unconfined, for the fresh /proc of each RUN.
-          opts=(--build-arg "GIT_SHA=$GITHUB_SHA"
-                --opt "label:org.opencontainers.image.created=$created"
-                --opt "label:org.opencontainers.image.revision=$GITHUB_SHA"
-                --opt "label:org.opencontainers.image.source=$source")
           stage=(); [ -n "$TARGET" ] && stage=("$TARGET")
-          # GitHub-hosted only: the toolbox container needs the unconfined seccomp/AppArmor profiles that
-          # rootless BuildKit asks for (user namespaces, mount) and unmasked /proc paths (the sandbox mounts
-          # a fresh /proc; the kernel refuses that while Docker's default masks still cover the outer one).
-          # Still no --privileged, still no root.
-          export TB_RUN_OPTS="--security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined"
-          tb bk "${stage[@]}" -C "$CONTEXT" -f "$DOCKERFILE" "${opts[@]}" --output "type=oci,dest=$TAR"
+          if [ -n "${TOOLBOX_NATIVE:-}" ]; then
+            # CI cluster: `bk` (toolbox): rootless BuildKit, started in-process by buildctl-daemonless.sh: no
+            # long-running daemon, no root, a fresh state directory per job (so no cache from other jobs) and
+            # image-resolve-mode=pull, so base images are always resolved from the registry. BuildKit's process
+            # sandbox stays on: the cluster pod has procMount Unmasked, for the fresh /proc of each RUN.
+            opts=(--build-arg "GIT_SHA=$GITHUB_SHA"
+                  --opt "label:org.opencontainers.image.created=$created"
+                  --opt "label:org.opencontainers.image.revision=$GITHUB_SHA"
+                  --opt "label:org.opencontainers.image.source=$source")
+            tb bk "${stage[@]}" -C "$CONTEXT" -f "$DOCKERFILE" "${opts[@]}" --output "type=oci,dest=$TAR"
+          else
+            # GitHub-hosted (public repos; owner rule: public code never runs on self-hosted machines): rootless
+            # BuildKit cannot start here, because hosted Ubuntu 24.04 restricts unprivileged user namespaces in
+            # AppArmor on the host (v3.0.1: "fork/exec /proc/self/exe: permission denied"). Instead of lifting
+            # that restriction, build with the VM's own Docker daemon and a buildx builder running the SAME
+            # BuildKit release as the toolbox (v0.34.2, digest-pinned, rootful variant). The VM is GitHub's and
+            # discarded after the job; the output is the same kind of OCI tar, so scan, SBOM, push and digest
+            # check below are unchanged. No cache: fresh builder per job, --no-cache, --pull.
+            docker buildx create --name "pipeline-$GITHUB_RUN_ID" --driver docker-container --use \
+              --driver-opt "image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe" >/dev/null
+            target=(); [ -n "$TARGET" ] && target=(--target "$TARGET")
+            # --provenance/--sbom=false: one plain image manifest in index.json, like bk (provenance and SBOM are
+            # produced and signed by this workflow, not by BuildKit).
+            docker buildx build --pull --no-cache --provenance=false --sbom=false "${target[@]}" \
+              -f "$DOCKERFILE" --build-arg "GIT_SHA=$GITHUB_SHA" \
+              --label "org.opencontainers.image.created=$created" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --label "org.opencontainers.image.source=$source" \
+              --output "type=oci,dest=$TAR" "$CONTEXT"
+            docker buildx rm "pipeline-$GITHUB_RUN_ID" >/dev/null || true
+          fi
           ls -la "$TAR"
           # Trivy cannot read an OCI-layout *tar* (only docker-archive tars or layout directories), Syft and crane
           # read the directory too: unpack once, every later step reads exactly these bytes.
