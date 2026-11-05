@@ -33,7 +33,7 @@ Signatur beweist also, dass beides lief, auch ohne Schutz von `main`.
 
 | | **öffentlich** | **privat** |
 |---|---|---|
-| Runner | GitHub-hosted (Standard; Opt-in: eigenes Scale Set nur für den Build, Input `public-runner`) | CI-Cluster (Kubernetes, ARC-Scale-Set `arc-ci`, ein frischer Pod pro Job); Signieren GitHub-hosted |
+| Runner | GitHub-hosted (immer: öffentlicher Code läuft nie auf eigenen Servern) | CI-Cluster (Kubernetes, ARC-Scale-Set `arc-ci`, ein frischer Pod pro Job); Signieren GitHub-hosted |
 | SAST | CodeQL | Semgrep (+ Bandit für Python) |
 | Signatur | Cosign keyless | Cosign keyless (Repo- und Workflow-Name stehen im öffentlichen Rekor-Log, Code nicht) |
 | Merge | `security-gate` ist Pflicht (Ruleset) | nicht blockierbar (GitHub Free), aber **kein Release ohne Gate und gemergten PR** |
@@ -234,22 +234,16 @@ Cluster, nicht im Repo.
 | Rolle | Labels in den Workflows | genutzt von | Netz |
 |---|---|---|---|
 | CI-Cluster | `arc-ci` (ARC-Scale-Set, Pod = `ci-toolbox`) | alle **privaten** Repos: Gate und Build | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
-| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos (Standard); für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
+| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos; für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
 
 Regeln: Es gibt keinen Deploy-Runner. Der Cluster nimmt signierte Images per Admission an, Shared
 Hosting bekommt seinen Upload von einem GitHub-hosted Runner. Self-hosted Runner nie für öffentliche
-Repos freigeben, außer per Opt-in (siehe unten). Signiert wird immer GitHub-hosted, nie im CI-Cluster. Die früheren persistenten
+Repos freigeben. Signiert wird immer GitHub-hosted, nie im CI-Cluster. Die früheren persistenten
 Runner-VMs (Label `ci`) und der Input `private-runner` sind abgelöst; der Input wird noch angenommen,
 aber ignoriert, damit bestehende Aufrufer nicht brechen.
 Mit dem Input `runner` (Standard `arc-ci`) lässt sich für private Repos ein anderes Scale Set ansteuern, z. B. zum
 Ausprobieren.
-Opt-in für öffentliche Repos: Der Input `public-runner` von `build-container.yml` (Standard leer = GitHub-hosted)
-legt das Runner-Label **nur für den Build-Job** fest. Das ist nötig, weil rootless BuildKit auf GitHub-hosted
-Ubuntu 24.04 scheitert (`kernel.apparmor_restrict_unprivileged_userns=1`). Es ist nur sicher mit einer
-Runner-Gruppe, die auf genau dieses eine Repo beschränkt ist: `build-container.yml` läuft nur auf
-`refs/heads/main` nach der Release-Policy, Fork-PR-Code erreicht den Runner also nicht. Gate, Signieren und
-Dependency-Track bleiben GitHub-hosted. Aufbau, Bedrohungsmodell, Grenzen, Stolpersteine: **[docs/runners.md](docs/runners.md)**, Konfiguration in
-[`runners/arc/`](runners/arc/).
+Öffentliche Repos bauen ihre Images immer auf GitHub-hosted Runnern: mit einem buildx-Builder derselben BuildKit-Version (v0.34.2, per Digest gepinnt) statt rootless `bk`, weil Ubuntu 24.04 dort unprivilegierte User-Namespaces per AppArmor sperrt.
 
 **Grenzen, offen benannt:**
 - Jeder Job bekommt einen **frischen Pod**: Arbeitsverzeichnis, BuildKit-Zustand und Trivy-Cache werden
