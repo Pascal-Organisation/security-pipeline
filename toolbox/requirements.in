@@ -1,0 +1,5 @@
+# Direct dependencies of the toolbox scanners. requirements.lock is generated from this file:
+#   uv pip compile --universal --python-version 3.12 --generate-hashes -o requirements.lock requirements.in
+semgrep==1.183.0
+zizmor==1.31.1
+bandit==1.9.4

@@ -100,6 +100,56 @@
       "labels": [
         "runtime-update"
       ]
+    },
+    {
+      "description": "Registries that publish no release timestamp (Docker Hub for many images, some mirrors): without this, minimumReleaseAge would block those updates forever. Timestamped releases still wait the full age.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
+      "description": "Own images (ghcr.io/pascal-organisation/*) are rolled out by the in-cluster updater CronJobs after the pipeline signed them: Renovate must not touch them, or the two would fight.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/pascal-organisation/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "k3s manifests pin images by digest only, with the version in a comment: the kubernetes manager reads those as 'latest' and would move them to the newest digest of :latest. The regex manager below tracks the commented version instead, so the kubernetes manager's own digest updates are off (it still proposes tag updates for tag-pinned images).",
+      "matchManagers": [
+        "kubernetes"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Homelab third-party images: the image: line in apps/*.yaml and the ClusterImagePolicy glob must change together, or the admission policy denies the new digest. One branch per image and current tag, covering both files.",
+      "matchFileNames": [
+        "Homelab-Skripte/k3s-apps/**"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "groupName": "k3s third-party {{{depName}}} {{{currentValue}}}"
+    },
+    {
+      "description": "Until grouping across apps and policy files is proven on real PRs, k3s image updates are never automerged.",
+      "matchFileNames": [
+        "Homelab-Skripte/k3s-apps/**"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "automerge": false
     }
   ],
   "customManagers": [
@@ -118,30 +168,6 @@
     },
     {
       "customType": "regex",
-      "description": "zizmor pinned by version in workflow env.",
-      "managerFilePatterns": [
-        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "ZIZMOR_VERSION: \"(?<currentValue>[^\"]+)\""
-      ],
-      "depNameTemplate": "zizmor",
-      "datasourceTemplate": "pypi"
-    },
-    {
-      "customType": "regex",
-      "description": "bandit pinned by version in workflow env.",
-      "managerFilePatterns": [
-        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "BANDIT_VERSION: \"(?<currentValue>[^\"]+)\""
-      ],
-      "depNameTemplate": "bandit",
-      "datasourceTemplate": "pypi"
-    },
-    {
-      "customType": "regex",
       "description": "nuclei-templates release pinned in dast.yml (tag + commit).",
       "managerFilePatterns": [
         "/(^|/)\\.github/workflows/dast\\.yml$/"
@@ -152,6 +178,30 @@
       "depNameTemplate": "projectdiscovery/nuclei-templates",
       "datasourceTemplate": "github-tags",
       "autoReplaceStringTemplate": "NUCLEI_TEMPLATES_REF: \"{{newValue}}\"\n  NUCLEI_TEMPLATES_SHA: {{newDigest}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Homelab k3s manifests: third-party images pinned as image: name@sha256:... with the version in a trailing comment (the kubernetes manager cannot read that version).",
+      "managerFilePatterns": [
+        "/(^|/)Homelab-Skripte/k3s-apps/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "image: (?<depName>[a-z0-9][a-z0-9._/-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\\s+# (?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)"
+      ],
+      "datasourceTemplate": "docker",
+      "autoReplaceStringTemplate": "image: {{depName}}@{{newDigest}}  # {{newValue}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Homelab ClusterImagePolicy globs: glob: \"<registry>/<image>@sha256:...\"  # <version>. Same dependency as the image: line in apps/*.yaml (depName normalised: index.docker.io/ and library/ dropped), so both files move in one PR.",
+      "managerFilePatterns": [
+        "/(^|/)Homelab-Skripte/k3s-apps/policies/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "glob: \"(?<prefix>index\\.docker\\.io/(?:library/)?)?(?<depName>[a-z0-9][a-z0-9._/-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s+# (?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)"
+      ],
+      "datasourceTemplate": "docker",
+      "autoReplaceStringTemplate": "glob: \"{{{prefix}}}{{depName}}@{{newDigest}}\"  # {{newValue}}"
     }
   ],
   "git-submodules": {
@@ -176,5 +226,10 @@
       "before 6am on monday"
     ],
     "automerge": true
+  },
+  "kubernetes": {
+    "managerFilePatterns": [
+      "/(^|/)Homelab-Skripte/k3s-apps/.+\\.ya?ml$/"
+    ]
   }
 }

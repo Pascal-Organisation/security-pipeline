@@ -21,9 +21,6 @@ FROM gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175
 FROM moby/buildkit:v0.34.2-rootless@sha256:c8252268760e1baba80780d63d738ef9f260fb7c7c0973c78494cb9ddd99eda1 AS buildkit
 
 FROM ghcr.io/actions/actions-runner:2.338.2@sha256:759a1d94a15b05941aba5196974ff43fe15b4cbba29b694b35cbc32a1166b232
-ARG SEMGREP_VERSION=1.183.0
-ARG ZIZMOR_VERSION=1.31.1
-ARG BANDIT_VERSION=1.9.4
 USER root
 # uidmap: newuidmap/newgidmap for rootless BuildKit; python3-venv for Semgrep/zizmor/Bandit
 # upgrade: the base image lags Ubuntu security fixes (Trivy found e.g. libbrotli1)
@@ -53,9 +50,11 @@ COPY --from=crane /ko-app/crane /usr/local/bin/crane
 COPY --from=buildkit /usr/bin/buildctl /usr/bin/buildkitd /usr/bin/buildkit-runc /usr/bin/rootlesskit /usr/bin/buildctl-daemonless.sh /usr/local/bin/
 # bk: one Dockerfile stage with rootless BuildKit (process sandbox on), see the script and docs/switching-tools.md
 COPY --chmod=755 bk /usr/local/bin/bk
+# requirements.lock: pip-compile --generate-hashes of requirements.in (Renovate keeps it current)
+COPY requirements.lock /tmp/requirements.lock
 RUN python3 -m venv /opt/py \
- && /opt/py/bin/pip install --no-cache-dir --disable-pip-version-check \
-      "semgrep==${SEMGREP_VERSION}" "zizmor==${ZIZMOR_VERSION}" "bandit==${BANDIT_VERSION}" \
+ && /opt/py/bin/pip install --no-cache-dir --disable-pip-version-check --require-hashes -r /tmp/requirements.lock \
+ && rm /tmp/requirements.lock \
  && ln -s /opt/py/bin/semgrep /opt/py/bin/zizmor /opt/py/bin/bandit /usr/local/bin/ \
  # rootless BuildKit maps build-container users into this range. It must lie inside the ids a
  # user-namespaced pod owns (0-65535, hostUsers: false) and above runner's uid 1001.
