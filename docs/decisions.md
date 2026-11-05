@@ -209,8 +209,8 @@ signature in bundle form.
 ### D-7 · Dependency-Track reports, it does not gate
 *2026-11-02 (v2.2.0, #9) · active*
 
-**Context.** The Trivy gate passes at build time, and new CVEs appear afterwards. The weekly `image-rescan`
-scans only `:latest` and ignores exceptions.
+**Context.** The Trivy gate passes at build time, and new CVEs appear afterwards. The former weekly re-scan
+(retired) scanned only `:latest` and ignored exceptions.
 
 **Decision.** After signing, a GitHub-hosted job with `permissions: {}` and `continue-on-error` uploads the
 attested SBOM to Dependency-Track: project = repository, version = commit, tagged with the image digest.
@@ -487,7 +487,6 @@ separate images, and their own dependencies were never scanned.
 **Trade-offs.**
 - Public callers must be added to the package's access list by hand, in the UI.
 - The toolbox itself is in the supply chain and is built with Docker (it can't build itself).
-- Semgrep, zizmor and Bandit are installed by version, without hashes.
 
 <a id="d-21"></a>
 ### D-21 · `bk`: rootless BuildKit with its process sandbox left on

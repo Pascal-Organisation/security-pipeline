@@ -157,15 +157,6 @@ templates loaded) is **not** a pass. DAST always runs on GitHub-hosted runners: 
 URLs, so the CI cluster needs no egress to arbitrary sites. With staging it runs **before** the production
 deploy (for example websiteghana `/release-test`), otherwise right after.
 
-### `image-rescan.yml`: weekly re-scan (being retired)
-
-It re-scans `ghcr.io/<repo>:latest` with fresh CVE data. Dependency-Track replaces it, because it re-checks
-every uploaded SBOM daily.
-
-Known limits of the re-scan:
-- It does not check out the repository, so `.security/exceptions.json` doesn't apply.
-- It scans `:latest`, which is not necessarily the digest running in the cluster.
-
 ### What "green" means
 
 Green in GitHub means the release is done and signed. Whether it is *running* is shown by the cluster
@@ -267,7 +258,6 @@ Rules:
   on a GitHub-hosted runner, because it can't build itself.
 - Without egress to the providers, TruffleHog can't verify secrets. Findings are then `unknown` and block.
   That is intentional, but noisy.
-- Semgrep, zizmor and Bandit are installed into the toolbox by pinned version, but **without hashes**.
 
 ---
 
