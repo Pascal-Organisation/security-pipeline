@@ -1,202 +1,218 @@
 # security-pipeline
 
-Zentrale, wiederverwendbare DevSecOps-Pipeline für alle Repos der Organisation
-**Pascal-Organisation**. Jedes Projekt ruft diese Workflows mit ein paar Zeilen auf –
-Sicherheits-Gates, Tool-Versionen und Policies werden hier einmal gepflegt und gelten
-überall.
+The central, reusable DevSecOps pipeline for every repository in the **Pascal-Organisation** GitHub
+organisation. Each project calls these workflows with a few lines of YAML. Security gates, tool versions
+and policies are maintained here once and apply everywhere.
 
-> **v3.0.0.** Kein Docker-Daemon mehr in CI-Jobs: Alle Tools kommen aus **einem** digest-gepinnten
-> Image (`ci-toolbox`), Images baut rootless BuildKit in ein OCI-Tar, das gescannt und byte-identisch
-> gepusht wird. Deployt wird per **Cluster-Admission** statt per Host-Agent: Der Cluster nimmt nur Images an,
-> die `build-container.yml` (gepinnt auf Commit) signiert hat. Signierte SBOMs gehen an Dependency-Track.
-> Tools lassen sich hier zentral tauschen: [docs/switching-tools.md](docs/switching-tools.md). Neues Projekt
-> anbinden: [docs/new-project.md](docs/new-project.md). Stand: `tools/fleet-status.sh` (Repos).
+> **In one sentence:** a container image runs in the app cluster only if *this* repository's
+> `build-container.yml`, at a known release commit, built it from a merged pull request on `main`, after the
+> security gate passed, and signed it together with an SBOM and a provenance statement.
+
+| | |
+|---|---|
+| Current release | see [`VERSION`](VERSION) |
+| Consumers | 8 repositories (`fleet/repos.json`, live state: `tools/fleet-status.sh`) |
+| **Why it is built this way** | [docs/decisions.md](docs/decisions.md): every decision with its reason, alternatives and trade-offs |
+| Adding a project | [docs/new-project.md](docs/new-project.md) |
+| How the self-hosted CI is isolated | [docs/runners.md](docs/runners.md) |
+| Swapping a tool, releasing the pipeline | [docs/switching-tools.md](docs/switching-tools.md) |
 
 ---
 
-## Überblick
+## The idea
 
 ```mermaid
 flowchart LR
-  dev[Commit<br/>signiert] --> pr[Pull Request]
+  dev[Signed commit] --> pr[Pull request]
   pr --> ci{ci.yml<br/>security-gate}
-  ci -->|Merge nach main| rel[build-container.yml<br/>Policy + Gate + Build + Signatur]
+  ci -->|merge to main| rel[build-container.yml<br/>policy + gate + build + sign]
   rel --> reg[(GHCR)]
-  reg --> adm{Cluster-Admission<br/>policy-controller<br/>ClusterImagePolicy}
-  adm -->|Signatur + Attestations<br/>passen| k8s[Workload läuft]
-  adm -.->|sonst| deny[abgelehnt]
+  rel -.->|SBOM, reporting only| dt[Dependency-Track]
+  reg --> adm{App cluster admission<br/>Sigstore policy-controller}
+  adm -->|signature + SBOM + provenance<br/>from a trusted release| run[Pod runs]
+  adm -.->|anything else| deny[denied]
 ```
 
-**Die Grundidee:** Der Cluster akzeptiert nur Images, die `build-container.yml` signiert hat. Dieser
-Workflow signiert erst, nachdem Release-Policy und Gate in ihm selbst gelaufen sind. Eine gültige
-Signatur beweist also, dass beides lief, auch ohne Schutz von `main`.
+**Why it works without branch protection.** GitHub Free cannot stop a merge in a private repository. So the
+pipeline does not try to protect the merge. It protects the *release*: `build-container.yml` checks the
+release policy and runs the security gate inside itself, and only then signs. The cluster accepts only
+signatures whose identity is `build-container.yml@<trusted release SHA>`. A caller can delete a `needs:` line
+from its own workflow, but it cannot get this workflow's identity without running these jobs. A valid
+signature is therefore proof that policy and gate ran.
 
-| | **öffentlich** | **privat** |
-|---|---|---|
-| Runner | GitHub-hosted (immer: öffentlicher Code läuft nie auf eigenen Servern) | CI-Cluster (Kubernetes, ARC-Scale-Set `arc-ci`, ein frischer Pod pro Job); Signieren GitHub-hosted |
-| SAST | CodeQL | Semgrep (+ Bandit für Python) |
-| Signatur | Cosign keyless | Cosign keyless (Repo- und Workflow-Name stehen im öffentlichen Rekor-Log, Code nicht) |
-| Merge | `security-gate` ist Pflicht (Ruleset) | nicht blockierbar (GitHub Free), aber **kein Release ohne Gate und gemergten PR** |
+### What a signature proves, and what it does not
 
-| Profil | Für | Deploy |
-|---|---|---|
-| `ci-only` | Code ohne Deploy | – |
-| `container-pull` | alles, was im App-Cluster läuft, auch statische Seiten als nginx-Image | Cluster-Admission prüft die Signatur; Updater holt das Image |
-| `static-ftps` | Shared Hosting ohne eigene Prüfung | `deploy-static.yml` prüft Gate und `main`, dann FTPS |
-
-Die Sichtbarkeit kommt nie aus einem Input: Der erste Job fragt die API, und ohne Antwort läuft
-nichts. Fork-PRs können die eigenen Runner so nie erreichen.
+| Proves | Does not prove |
+|---|---|
+| The image was built by `build-container.yml` at a release commit of this repo | Who wrote the code (the `main` ruleset and signed commits cover that) |
+| It came from `refs/heads/main` of the named repository, and the commit was the merge of a PR | That the code is free of bugs: only that the gates found nothing blocking |
+| Trivy scanned exactly these bytes (the pushed digest must equal the scanned digest) | SLSA Build L2/L3: provenance comes from a job step, so we claim **L1 plus signature** |
+| An SBOM (CycloneDX) and a SLSA v1 provenance statement belong to it | That the image still has no known CVEs today (Dependency-Track re-checks daily, reporting only) |
 
 ---
 
-## v3: kein Docker-Daemon in Jobs
+## Public and private repositories
 
-Alle Tools (Trivy, Syft, TruffleHog, actionlint, zizmor, hadolint, shellcheck, Semgrep, Bandit, Cosign,
-crane und rootless BuildKit) stecken in **einem** Image: `ghcr.io/pascal-organisation/ci-toolbox`
-([`toolbox/Dockerfile`](toolbox/Dockerfile), gebaut, gescannt und keyless signiert von
-`.github/workflows/toolbox.yml`). Die Tools werden aus ihren offiziellen, per Digest gepinnten Images
-kopiert, das Toolbox-Image bringt also kein neues Vertrauen mit. Die Workflows pinnen die Toolbox per
-Digest in genau einer Variable (`TOOLBOX`, Renovate hält sie aktuell).
+The pipeline reads the visibility from the GitHub API in its first job (never from an input) and
+fails closed if it can't.
 
-| | CI-Cluster (privat) | GitHub-hosted (öffentlich) |
+| | **Public** | **Private** |
 |---|---|---|
-| Wo laufen die Tools? | Der Runner-Pod **ist** die Toolbox (`TOOLBOX_NATIVE=1`), alles läuft direkt | `docker run` des Toolbox-Images über den Wrapper `tb` |
-| Image bauen | rootless BuildKit im Pod, ohne root und ohne Daemon | dasselbe `buildctl-daemonless.sh` (Wrapper `bk`), im Toolbox-Container |
-| Docker nötig? | nein: kein Socket, kein dind, kein `privileged` | nur als Startmechanismus für den Toolbox-Container |
+| Runner | GitHub-hosted, always. **Rule: public code never runs on our own machines.** | CI cluster: an ARC scale set per trust domain, a fresh pod per job |
+| Image build | buildx builder with the same BuildKit release, on GitHub's throwaway VM | rootless BuildKit (`bk`) inside the pod, no Docker daemon |
+| SAST | CodeQL | Semgrep (plus Bandit for Python) |
+| Signing | Cosign keyless, GitHub-hosted | Cosign keyless, GitHub-hosted (the repo and workflow names appear in the public Rekor log, the code does not) |
+| Merge protection | Ruleset: `Security / security-gate` required | Not enforceable on GitHub Free, **but no release without the gate and a merged PR** |
 
-Gleiche Schritte, gleiche Tool-Versionen überall. Der Pod ist nicht privilegiert, nutzt User Namespaces
-(root im Pod ist nicht root auf dem Node) und wird nach dem Job verworfen.
+Signing always runs on GitHub-hosted runners, in a job that runs no repository code and no third-party
+scanner. That way scanner code never holds the `id-token` permission.
+
+### Project profiles
+
+| Profile | For | Deployment |
+|---|---|---|
+| `ci-only` | Code without a deployment | none |
+| `container-pull` | Everything that runs in the app cluster, including static sites as an nginx image | Cluster admission checks the signature; an in-cluster updater rolls new builds out |
+| `static-ftps` | Shared hosting that can't check anything itself | `deploy-static.yml` checks the gate and `main`, then uploads over FTPS |
 
 ---
 
-## Die Workflows
+## The workflows
 
-### `ci.yml` – Gate für jeden PR und Push
+### `ci.yml`: the gate for every PR and push
 
-| Schritt | Tool | Was es tut | Gate |
+| Check | Tool | What it does | Blocks on |
 |---|---|---|---|
-| Workflow-Lint | **actionlint** | Syntax, Typen, Expressions, Shellcheck in `run:` | jeder Fehler |
-| Workflow-Security | **zizmor** | Template-Injection, gefährliche Trigger, zu breite Permissions, ungepinnte Actions | ≥ medium |
-| Secrets | **TruffleHog** | sucht Secrets im Diff (PR/Push) bzw. der ganzen Historie (Schedule) und prüft, ob sie noch gültig sind | verified + unknown |
-| SAST öffentlich | **CodeQL** | Datenfluss-Analyse (`security-extended`), Ergebnisse im Security-Tab | – (Alerts) |
-| SAST privat | **Semgrep CE** | Regel-basiert, `p/default` | Severity ERROR |
-| SAST Python privat | **Bandit** | Python-spezifisch (subprocess, pickle, yaml.load, …) | high / confidence ≥ medium |
-| Dependencies + IaC | **Trivy fs** | CVEs in Lockfiles, Fehlkonfigurationen (Dockerfile, Terraform, …), Lizenzen | fixable HIGH/CRITICAL |
-| Dockerfile | **hadolint** | Best Practices für Dockerfiles | error |
+| Workflow lint | **actionlint** | Syntax, types, expressions, shellcheck inside `run:` | any error |
+| Workflow security | **zizmor** | Template injection, dangerous triggers, broad permissions, unpinned actions | ≥ medium |
+| Secrets | **TruffleHog** | Secrets in the diff (PR/push) or the whole history (schedule), verified against the provider | verified + unknown |
+| SAST, public | **CodeQL** | Data-flow analysis (`security-extended`), results in the Security tab | – (alerts) |
+| SAST, private | **Semgrep CE** | Rule-based, `p/default` | severity ERROR |
+| SAST Python, private | **Bandit** | Python-specific (subprocess, pickle, `yaml.load`, …) | high, confidence ≥ medium |
+| Dependencies + IaC | **Trivy fs** | CVEs in lock files, misconfigurations (Dockerfile, Kubernetes, Terraform), licences | fixable HIGH/CRITICAL |
+| Dockerfile | **hadolint** | Dockerfile best practices | error |
 
-### `build-container.yml` – Release eines Images (nur `main`)
+All jobs report into one check, **`Security / security-gate`**. That check is the only thing callers and
+rulesets depend on, so a tool can be swapped here without touching any repo.
 
-1. **Release-Policy:** Commit liegt auf `main`, ist verifiziert und das Merge-Ergebnis eines PRs
-2. **Gate:** dieselbe `ci.yml` wie im PR
-3. **Build** mit rootless BuildKit in ein **OCI-Tar** (kein Docker-Daemon), mit OCI-Labels (`created` ist
-   Pflicht: Replay-Schutz beim Updater im App-Cluster)
-4. **Trivy image** auf dem Tar – Gate: fixable HIGH/CRITICAL + eingebettete Secrets
-5. **Syft** – SBOM im **CycloneDX**-Format, ebenfalls aus dem Tar. Betriebssystem-Pakete (`pkg:deb`, `pkg:apk`) verlieren
-   dabei die von Syft geratenen CPEs: Distributionen backporten Fixes ohne neue Upstream-Version, ein
-   NVD-Abgleich per CPE meldet sonst längst behobene CVEs. Dependency-Track prüft sie per purl gegen
-   OSV (Debian/Alpine), also gegen dieselben Daten wie das Trivy-Gate.
-6. Push nach `ghcr.io/pascal-organisation/<repo>` mit **crane** – genau das gescannte Tar (entpackt als
-   OCI-Layout), kein Rebuild, kein Re-Tag durch einen Daemon. Der Workflow bricht ab, wenn der Digest der
-   Registry nicht dem Manifest-Digest im Tar entspricht.
-7. **SLSA-v1-Provenance** – ehrlich eingeordnet: Build **L1 + Signatur**. L2/L3 bräuchte Provenance
-   von der Build-Plattform selbst.
-8. **Cosign keyless:** Signatur + Attestations auf einem GitHub-hosted Runner, ohne Repo-Code und
-   ohne Scanner
-9. **Dependency-Track:** das signierte SBOM geht als Projekt `<repo>`, Version = Commit, an
-   `dtrack.pascalhaag.de` (über einen Access-Service-Token, der nur `/api/v1/bom` öffnet). Nur
-   berichtend: Fällt Dependency-Track aus, bleibt das Release grün. Ohne die drei Secrets
-   `DTRACK_*` wird der Schritt übersprungen.
+### `build-container.yml`: releasing an image (main only)
 
-### Deploy: Cluster-Admission statt Host-Agent
+1. **Release policy:** the commit is on `main`, GitHub-verified (signed), and the merge result of a PR. A
+   direct push still lands in git, but it never gets signed.
+2. **Gate:** the same `ci.yml` as on the PR.
+3. **Build** into an **OCI tar**, with OCI labels. `org.opencontainers.image.created` is mandatory: the
+   cluster's updater uses it for replay protection. Private repos build with rootless BuildKit in the CI
+   cluster, public repos with a digest-pinned buildx builder on GitHub-hosted runners.
+4. **Trivy image** on the tar. It blocks on fixable HIGH/CRITICAL findings and embedded secrets.
+5. **Syft** writes a **CycloneDX** SBOM from the same tar. OS packages (`pkg:deb`, `pkg:apk`) lose the
+   CPEs Syft guessed. Distributions backport fixes without bumping the upstream version, so a CPE match
+   against NVD reports CVEs that are long fixed. Dependency-Track judges them by purl against OSV instead,
+   which is the same data the Trivy gate uses.
+6. **Push** to `ghcr.io/pascal-organisation/<repo>` with **crane**: exactly the scanned bytes (the tar
+   unpacked once as an OCI layout), with no rebuild and no re-tag by a daemon. The job fails if the registry
+   digest differs from the manifest digest inside the scanned tar.
+7. **SLSA v1 provenance**, described honestly as Build **L1 plus signature**.
+8. **Cosign keyless:** signature and attestations (SBOM, provenance) on a GitHub-hosted runner, without
+   repository code and without scanners.
+9. **Dependency-Track:** the signed SBOM is uploaded as project `<repo>`, version = commit. The upload uses a
+   Cloudflare Access service token that opens only `/api/v1/bom`. It is reporting only: if Dependency-Track
+   is down, the release stays green. Without the three `DTRACK_*` secrets the step is skipped.
 
-Seit v3 entscheidet der **Cluster**, was laufen darf: Der Sigstore **policy-controller** prüft bei
-jedem Pod die Signatur und die Attestations. Eine `ClusterImagePolicy` pro App verlangt als
-Workflow-Identität `build-container.yml@<sha>` (GitHub-OIDC-Issuer, Repo, `refs/heads/main`). Aufrufer
-pinnen per SHA, die Identität endet also auf dem Commit: Die Policy listet nur Release-Commits dieser
-Pipeline (Tags, deren Commit auf dem geschützten `main` liegt). Ein Branch mit einem entkernten
-`build-container.yml` signiert zwar gültig, aber als `@<branch-sha>` und wird bei der Admission
-abgelehnt. **Bei jedem Pipeline-Release kommt dessen SHA in die Policies**, erst dann dürfen Aufrufer
-darauf pinnen. Die Datei darf nicht ohne die Überlappung aus
-[docs/switching-tools.md](docs/switching-tools.md) umbenannt werden.
+### Deployment: cluster admission instead of a host agent
 
-Der frühere Host-Agent `app-deploy` ist seit v3.0.2 entfernt (zuletzt enthalten in v3.0.1).
+Since v3 the **cluster** decides what may run. The Sigstore **policy-controller** checks every pod's image
+against a `ClusterImagePolicy` per application. The policy demands three things:
 
-### `deploy-static.yml` – Shared Hosting (privat)
+- keyless identity `…/security-pipeline/.github/workflows/build-container.yml@<sha>`, with the GitHub OIDC issuer;
+- a CycloneDX SBOM attestation;
+- a SLSA provenance that names the repository and `refs/heads/main`.
 
-Für Ziele, die selbst nichts prüfen können. Vor dem Upload prüft der Workflow selbst, dass der
-Commit auf `main` liegt und `Security / security-gate` grün ist, und untersucht das Artefakt (nur
-Dateien/Ordner, keine Links, keine `..`). Dann lädt er per FTPS hoch, **nie mit Löschen**. Er läuft
-GitHub-hosted (`deploy-runner: '"ubuntu-24.04"'`): Das Ziel ist öffentliches Shared Hosting, eine eigene
-Deploy-VM brächte nur ein Egress-Loch für FTP. `ssh` als Transport nutzt kein Repo mehr
-(`pascalhaag-website` ist seit v2 `container-pull`) und fliegt mit dem nächsten Major.
+Callers pin the pipeline by commit SHA, so the identity ends in that SHA. The policies list only release
+commits of this repository. A branch with a gutted `build-container.yml` produces a valid signature, but as
+`@<branch-sha>`, and admission refuses it.
 
-### `dast.yml` – von außen gegen die laufende Seite
+**Every pipeline release therefore follows a fixed order:** signed tag → its SHA into the cluster
+policies (and applied) → only then the callers move. `build-container.yml` must not be renamed or moved
+without the overlap described in [switching-tools.md](docs/switching-tools.md).
 
-- **OWASP ZAP Baseline**: spidert passiv – Header, Cookies, CSP, Info-Leaks
-- **Nuclei**: Templates für Fehlkonfigurationen, offene Dateien/Panels, TLS, bekannte CVEs
-  (rate-limited, ohne intrusive/fuzz-Templates)
+The former host agent `app-deploy`, a pull-based deployer per host, was removed in v3.0.2. The last
+release that contains it is v3.0.1.
 
-Gate: ZAP High bzw. Nuclei high/critical. Ein Scan, der nicht läuft (ZAP-Exit ≥ 3, Nuclei
-ohne geladene Templates), ist **kein** Pass. Templates sind auf ein Release gepinnt
-(Renovate hält es aktuell). DAST läuft immer auf GitHub-hosted Runnern – die Ziele sind
-öffentlich, und der CI-Cluster braucht so keinen Egress zu beliebigen Seiten. ZAP und Nuclei laufen
-weiterhin per `docker run` ihrer gepinnten Images: Sie gehören nicht in die Toolbox, und der Workflow
-läuft nur GitHub-hosted (kein CI-Cluster-Pfad). Mit Staging (z. B. websiteghana
-`/release-test`) **vor** dem Produktiv-Deploy, sonst direkt danach gegen live.
+### `deploy-static.yml`: shared hosting
 
-### `image-rescan.yml` – wöchentlicher Re-Scan
+This workflow is for targets that can't verify anything themselves. Before the upload it checks on its own
+that the commit is on `main` and that `Security / security-gate` is green. It inspects the artifact (only
+files and folders, no links, no `..`). It then uploads over FTPS and **never deletes**: a deploy that can
+delete eventually deletes the wrong thing. It runs GitHub-hosted, because the target is public shared
+hosting and a deploy VM in the LAN would only add an FTP egress hole.
 
-Scannt `ghcr.io/<repo>:latest` mit frischen CVE-Daten (per `schedule:` aufrufen). Trivy zieht das Image
-selbst mit den Registry-Zugangsdaten aus der Umgebung (kein `docker login`, `pull` oder `save`); Docker
-startet nur das gepinnte Trivy-Image, der Workflow läuft ausschließlich GitHub-hosted. Wird
-abgelöst, sobald alle Container-Repos ihr SBOM an Dependency-Track schicken: Das prüft jedes
-hochgeladene SBOM täglich gegen neue CVEs.
+### `dast.yml`: testing the running site from outside
 
-Bekannte Grenzen: Der Re-Scan checkt kein Repo aus, Ausnahmen aus `.security/exceptions.json`
-gelten hier also nicht. Und er scannt `:latest`, nicht zwingend den Digest, der im
-Cluster läuft (nach einem Rollback sind das zwei verschiedene Images). Noch ruft ihn kein Repo auf.
+- **OWASP ZAP baseline** spiders passively and checks headers, cookies, CSP and information leaks.
+- **Nuclei** runs templates for misconfigurations, exposed files and panels, TLS and known CVEs. It is
+  rate-limited and uses no intrusive or fuzzing templates.
 
-### Deploy-Status
+It blocks on ZAP High or Nuclei high/critical. A scan that does not run (ZAP exit ≥ 3, or Nuclei with no
+templates loaded) is **not** a pass. DAST always runs on GitHub-hosted runners: the targets are public
+URLs, so the CI cluster needs no egress to arbitrary sites. With staging it runs **before** the production
+deploy (for example websiteghana `/release-test`), otherwise right after.
 
-Grün in GitHub heißt nur: Das Release ist fertig und signiert. Ob es läuft, zeigt der Cluster (Monitoring
-im App-Cluster).
+### `image-rescan.yml`: weekly re-scan (being retired)
+
+It re-scans `ghcr.io/<repo>:latest` with fresh CVE data. Dependency-Track replaces it, because it re-checks
+every uploaded SBOM daily.
+
+Known limits of the re-scan:
+- It does not check out the repository, so `.security/exceptions.json` doesn't apply.
+- It scans `:latest`, which is not necessarily the digest running in the cluster.
+
+### What "green" means
+
+Green in GitHub means the release is done and signed. Whether it is *running* is shown by the cluster
+(updater logs, monitoring in the app cluster).
 
 ---
 
-## Nutzung
+## Using it
 
-Aufrufer pinnen die Workflows **per Commit-SHA** (mit Versions-Kommentar), Renovate hält
-sie aktuell:
+Callers pin the workflows **by commit SHA**, with a version comment. Renovate keeps them current:
 
 ```yaml
 jobs:
   security:
-    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # v1.0.0
-    permissions:          # Obergrenze für die verschachtelten Jobs
+    name: Security          # required: produces the check "Security / security-gate"
+    uses: Pascal-Organisation/security-pipeline/.github/workflows/ci.yml@<sha> # vX.Y.Z
+    permissions:            # upper bound for the nested jobs
       contents: read
-      actions: read         # nur CodeQL (öffentlich) nutzt das
+      actions: read         # only CodeQL (public) uses it
       security-events: write
+      packages: read        # pull the private ci-toolbox
     with:
       python-paths: "src"
       dockerfile: Dockerfile
 ```
 
-GitHub prüft die `permissions` des Aufrufers gegen **jeden** verschachtelten Job –
-auch gegen Jobs, die übersprungen werden (CodeQL, keyless Signing in privaten Repos).
-Der Aufrufer gibt deshalb eine Obergrenze an; jeder Job hier deklariert selbst nur das,
-was er braucht. Für `build-container.yml` heißt das: `contents: read`, `actions: read`,
-`security-events: write`, `pull-requests: read`, `packages: write`, `id-token: write`.
+GitHub checks the caller's `permissions` against **every** nested job, including jobs that are skipped.
+The caller therefore states an upper bound, and each job here declares only what it needs. If the bound is
+too low, the run fails as `startup_failure` with no further explanation.
 
-**v2 → v3, Pflicht für Aufrufer:** Das Paket `ci-toolbox` ist privat. Aufrufer von `ci.yml` ergänzen
-`packages: read` in den `permissions` (bei `build-container.yml` reicht das vorhandene `packages: write`).
-GitHub-hosted Runner (alle öffentlichen Repos) melden sich dafür mit dem `GITHUB_TOKEN` an der GHCR an,
-ziehen die Toolbox und löschen das Login sofort (eigenes `DOCKER_CONFIG` unter `RUNNER_TEMP`). Außerdem muss
-**jedes öffentliche Aufrufer-Repo** unter *Packages → ci-toolbox → Package settings → Manage Actions
-access* mit der Rolle **Read** eingetragen sein (nur in der Oberfläche möglich). Sonst scheitert der Pull mit
-`unauthorized`. Private Repos laufen im CI-Cluster und brauchen nichts davon.
+For `build-container.yml` the bound is:
+- `contents: read`, `actions: read`, `security-events: write`;
+- `pull-requests: read`, `packages: write`, `id-token: write`.
 
-Für Dependency-Track gibt der Release-Job die drei Repo-Secrets ausdrücklich weiter (nicht
-`secrets: inherit`, damit die Pipeline nur sieht, was sie braucht):
+A caller that runs its own `ci.yml` inside the release workflow must also grant `packages: read` to that
+job.
+
+**The private toolbox.** The `ci-toolbox` package is private, and that is an owner decision.
+- GitHub-hosted jobs log in with the job's `GITHUB_TOKEN`, pull the toolbox, and delete the login right
+  away (a throwaway `DOCKER_CONFIG` under `RUNNER_TEMP`).
+- **Every public caller** must be listed under *Packages → ci-toolbox → Package settings → Manage Actions
+  access* with role **Read**. That list is UI-only, there is no API for it. Without the entry the pull fails
+  with `unauthorized`.
+- Private repositories run in the CI cluster, which pulls with its own read-only secret.
+
+For Dependency-Track the release job passes the three secrets explicitly. It does not use
+`secrets: inherit`, so the pipeline sees only what it needs:
 
 ```yaml
     secrets:
@@ -205,68 +221,60 @@ Für Dependency-Track gibt der Release-Job die drei Repo-Secrets ausdrücklich w
       DTRACK_ACCESS_CLIENT_SECRET: ${{ secrets.DTRACK_ACCESS_CLIENT_SECRET }}
 ```
 
-Vollständige Beispiele: `solar` (öffentlich), `bahnbot` (privat), `websiteghana` (FTPS).
+Complete examples: `solar` (public), `bahnbot` (private), `websiteghana` (FTPS).
 
-## Umsetzung in den Repos
+### The contract
 
-`fleet/repos.json` hält fest, welches Repo welches Profil und welchen Rollout-Ring hat und
-wo es bewusst abweicht. Den tatsächlichen Stand liest `tools/fleet-status.sh` live von
-GitHub; eine Tabelle von Hand wäre nach Stunden veraltet.
+Rulesets and release workflows depend on **one** check, `Security / security-gate`. The jobs under it are
+named after capabilities (`Secrets`, `SAST (private)`, `Dependencies & IaC`, …), not after tools. Changing
+the contract is a major release. Details in [switching-tools.md](docs/switching-tools.md).
 
-### Der Vertrag
+### Secrets in callers
 
-Rulesets und Release-Workflows setzen nur einen Check voraus:
-**`Security / security-gate`** (der Aufrufer-Job heißt dafür `Security`). Die Jobs darunter
-heißen nach Fähigkeiten (`Secrets`, `SAST (private)`, `Dependencies & IaC` …), nicht nach
-Tools. Was zum Vertrag gehört und wie man ein Tool tauscht:
-[docs/switching-tools.md](docs/switching-tools.md).
+`container-pull` repos need none for deployment, because the cluster pulls by itself. They hold only the
+optional `DTRACK_*` trio. `static-ftps` repos hold `FTP_HOST`, `FTP_USER` and `FTP_PASS`.
 
-### Secrets
+### Exceptions
 
-Repos mit `container-pull` brauchen keine: Der Cluster holt selbst. Nur `static-ftps` hält
-`FTP_HOST`, `FTP_USER`, `FTP_PASS`. Für private Images liegt der Lese-Login für GHCR als Pull-Secret im
-Cluster, nicht im Repo.
+Accepted findings go into `.security/exceptions.json` in the repository, always with a reason and an
+expiry date. After the expiry the finding blocks again. The format is scanner-neutral, see
+[switching-tools.md](docs/switching-tools.md#exceptions).
 
 ---
 
-## Runner
+## Runners
 
-| Rolle | Labels in den Workflows | genutzt von | Netz |
+| Role | Label | Used by | Network |
 |---|---|---|---|
-| CI-Cluster | `arc-ci` (ARC-Scale-Set, Pod = `ci-toolbox`) | alle **privaten** Repos: Gate und Build | ausgehend nur GitHub, Registries, Paketquellen, semgrep.dev |
-| GitHub-hosted | `ubuntu-24.04` | alle **öffentlichen** Repos; für private: Signieren, SBOM-Upload, DAST, Re-Scan, FTPS-Upload | – |
+| CI cluster | `arc-ci`, `arc-bahnbot`, `arc-pascalhaag-website`, `arc-websiteghana` (one ARC scale set and runner group per trust domain; pod = `ci-toolbox`) | **private** repos: gate and build | outbound only: GitHub, registries, package mirrors, semgrep.dev |
+| GitHub-hosted | `ubuntu-24.04` | all **public** repos; for private repos: signing, SBOM upload, DAST, re-scan, FTPS upload | – |
 
-Regeln: Es gibt keinen Deploy-Runner. Der Cluster nimmt signierte Images per Admission an, Shared
-Hosting bekommt seinen Upload von einem GitHub-hosted Runner. Self-hosted Runner nie für öffentliche
-Repos freigeben. Signiert wird immer GitHub-hosted, nie im CI-Cluster. Die früheren persistenten
-Runner-VMs (Label `ci`) und der Input `private-runner` sind abgelöst; der Input wird noch angenommen,
-aber ignoriert, damit bestehende Aufrufer nicht brechen.
-Mit dem Input `runner` (Standard `arc-ci`) lässt sich für private Repos ein anderes Scale Set ansteuern, z. B. zum
-Ausprobieren.
-Öffentliche Repos bauen ihre Images immer auf GitHub-hosted Runnern: mit einem buildx-Builder derselben BuildKit-Version (v0.34.2, per Digest gepinnt) statt rootless `bk`, weil Ubuntu 24.04 dort unprivilegierte User-Namespaces per AppArmor sperrt.
+Rules:
+- There is no deploy runner. The cluster pulls signed images, and shared hosting gets its upload from a
+  GitHub-hosted runner.
+- Self-hosted runners are never available to public repositories. The runner groups refuse them, and
+  `ci.yml` routes public repos to GitHub by visibility: two independent safeguards.
+- Signing never runs in the CI cluster.
+- The input `runner` (default `arc-ci`) selects the scale set of a private repo. The old input
+  `private-runner` is still accepted, but ignored, so existing callers don't break.
 
-**Grenzen, offen benannt:**
-- Jeder Job bekommt einen **frischen Pod**: Arbeitsverzeichnis, BuildKit-Zustand und Trivy-Cache werden
-  verworfen, Base-Images immer aus der Registry gezogen (`image-resolve-mode=pull`). Ein Docker-Socket
-  existiert nicht mehr. Rootless BuildKit braucht trotzdem ein gelockertes Seccomp-/AppArmor-Profil, das
-  ist schwächer als eine MicroVM pro Job.
-- Das Toolbox-Image ist selbst Teil der Lieferkette: Es wird von `toolbox.yml` gebaut, gescannt und
-  signiert, aber mit Docker auf einem GitHub-hosted Runner (es kann sich nicht selbst bauen).
-- TruffleHog kann ohne Egress zu den Providern nichts verifizieren – Funde sind dann
-  `unknown` und blockieren (gewollt, aber laut).
-- Semgrep, zizmor und Bandit werden beim Bau der Toolbox per pip **ohne Hashes** installiert (Version
-  gepinnt).
+**Limits, stated openly:**
+- Each job gets a **fresh pod**: working directory, BuildKit state and Trivy cache are discarded, and base
+  images are always pulled from the registry. There is no Docker socket. Rootless BuildKit still needs relaxed
+  seccomp/AppArmor profiles. That is weaker than a microVM per job (see
+  [runners.md](docs/runners.md)).
+- The toolbox image is part of the supply chain. `toolbox.yml` builds, scans and signs it, but with Docker
+  on a GitHub-hosted runner, because it can't build itself.
+- Without egress to the providers, TruffleHog can't verify secrets. Findings are then `unknown` and block.
+  That is intentional, but noisy.
+- Semgrep, zizmor and Bandit are installed into the toolbox by pinned version, but **without hashes**.
 
-## Ausnahmen
+---
 
-Akzeptierte Findings gehören in `.security/exceptions.json` im jeweiligen Repo – immer mit
-Begründung und Ablaufdatum. Das Format hängt an keinem Scanner, siehe
-[docs/switching-tools.md](docs/switching-tools.md#ausnahmen).
+## Locally: pre-commit and signed commits
 
-## Lokal: pre-commit & signierte Commits
-
-`templates/pre-commit-config.yaml` → als `.pre-commit-config.yaml` ins Repo
-(gitleaks, actionlint, zizmor, hadolint, Basis-Checks).
+Copy `templates/pre-commit-config.yaml` into the repository as `.pre-commit-config.yaml`. It runs
+gitleaks, actionlint, zizmor, hadolint and basic checks.
 
 ```bash
 git config --global gpg.format ssh
@@ -276,13 +284,16 @@ git config --global commit.gpgsign true
 
 ## Renovate
 
-`renovate/default.json` ist das gemeinsame Preset: pinnt Actions und Images auf
-Digests, aktualisiert auch `image:tag@sha256` in `run:`-Zeilen und Skripten (was
-Dependabot nicht kann), regeneriert gehashte pip-compile-Locks (wöchentlich), wartet 3 Tage nach einem Release und
-merged kleine Updates selbst als PR, sobald alle Checks grün sind. Ausgenommen: Majors und
-Minor-/Major-Sprünge von Laufzeit-Images (python, php, node, …) – die kommen immer als PR zur
-Durchsicht. Die eigenen Workflows laufen in Ringen: `workingrepo` und
-`anmeldungunihandball` sofort, alle anderen nach 3 Tagen, Majors immer von Hand. Pro Repo:
+`renovate/default.json` is the shared preset. It:
+- pins actions and images to digests, including `image:tag@sha256` inside `run:` lines and scripts, which
+  Dependabot can't do;
+- regenerates hashed pip-compile locks weekly;
+- waits 3 days after a release;
+- merges small updates itself once every check is green.
+
+Majors and minor or major jumps of runtime images (python, php, node, …) always come as a PR for review.
+The pipeline's own workflows roll out in rings: `workingrepo` and `anmeldungunihandball` immediately, all
+others after 3 days, majors always by hand. Per repository:
 
 ```json
 { "extends": ["local>Pascal-Organisation/security-pipeline//renovate/default"] }
@@ -290,12 +301,11 @@ Durchsicht. Die eigenen Workflows laufen in Ringen: `workingrepo` und
 
 ## Roadmap
 
-- **Harbor** statt GHCR: Registry-seitig unsignierte Images ablehnen
-- Org-Rulesets für öffentliche Repos (signierte Commits, required checks)
-- **Statische Deploys absichern (vorgezogen):** Signatur fürs Artefakt (`cosign sign-blob`)
-  und Prüfung im Receive-Skript; bei FTPS verwaiste Dateien melden (bisher bleibt eine
-  versehentlich veröffentlichte Datei dauerhaft live, weil nie gelöscht wird)
-- **CodeQL als Gate** in öffentlichen Repos: Code-Scanning-Merge-Protection per Ruleset
-  (kostenlos für öffentliche Repos)
-- **Signierte Commits in privaten Repos prüfen:** CI-Check per `git verify-commit` gegen
-  eine `allowed_signers`-Datei (Rulesets kosten bei privaten Repos)
+- **Harbor** instead of GHCR, to reject unsigned images at the registry.
+- Org rulesets for public repositories (signed commits, required checks).
+- **Securing static deploys:** a signature for the artifact (`cosign sign-blob`), and reporting orphaned
+  files on FTPS. Today a file published by mistake stays live, because nothing is ever deleted.
+- **CodeQL as a gate** in public repositories, via code-scanning merge protection in a ruleset (free for public repos).
+- **Checking signed commits in private repositories:** a CI check with `git verify-commit` against an
+  `allowed_signers` file, since rulesets cost money for private repos.
+- The sub-ID layout for rootless BuildKit moves from the cluster's ConfigMap into the toolbox image.
