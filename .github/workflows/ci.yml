@@ -412,7 +412,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The action fails with "not supported" when GitHub recognises no manifest in the repo (the SBOM
+      # endpoint answers 404). That is not a finding: say so and skip. Any other probe error fails the job.
+      - id: graph
+        name: Probe the dependency graph
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/dependency-graph/sbom")"
+          case "$code" in
+            200) echo "available=true" >> "$GITHUB_OUTPUT" ;;
+            404)
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Dependency review skipped::no manifests the dependency graph supports in this repository"
+              echo "Dependency review skipped: no supported manifests (dependency graph SBOM returned 404)." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::dependency graph probe returned HTTP $code"; exit 1 ;;
+          esac
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: ${{ steps.graph.outputs.available == 'true' }}
         with:
           fail-on-severity: high
           comment-summary-in-pr: never
