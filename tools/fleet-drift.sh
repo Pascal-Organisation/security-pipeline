@@ -2,7 +2,7 @@
 #
 # fleet-drift — compare live GitHub settings with the expectations in fleet/repos.json.
 # Read-only. Needs a token that may read org Actions settings and repo administration data
-# (GH_TOKEN; see docs/secret-rotation.md, FLEET_DRIFT_TOKEN). Exit 1 and a list on drift.
+# (GH_TOKEN = FLEET_DRIFT_TOKEN, fine-grained read-only: org + repo Administration read). Exit 1 and a list on drift.
 set -euo pipefail
 
 MANIFEST="$(dirname "$0")/../fleet/repos.json"
