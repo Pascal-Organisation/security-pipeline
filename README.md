@@ -3,6 +3,7 @@
 Reusable GitHub Actions workflows (security gate, signed container release, DAST, static deploy) for the
 Pascal-Organisation repositories. Callers pin a release commit; tools and policy live only here.
 
+Architectural goal: [`docs/target-architecture.md`](docs/target-architecture.md) — principles, goal states, deploy contract, maturity levels.
 Current release: see [`VERSION`](VERSION). Fleet: [`fleet/repos.json`](fleet/repos.json), live state via
 `tools/fleet-status.sh`. Vulnerability reports: [SECURITY.md](SECURITY.md).
 
