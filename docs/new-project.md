@@ -41,4 +41,4 @@ Private repos: the cluster pulls with its own pull secret; the GHCR package stay
 - Do not add Dependabot. Trivy only sees dependencies through lock/requirements files.
 - Renaming or moving a repo changes the image path and signing identity; the cluster policy must follow.
 
-Cluster side: see the homelab repo's new-app guide.
+Cluster side: see the new-app guide in the private infrastructure repository.

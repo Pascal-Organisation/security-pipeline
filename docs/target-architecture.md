@@ -1,19 +1,19 @@
 # Target architecture (architectural goal)
 
 Status: **binding goal**, adopted 2026-11-09 (decision D-40). Owner: @pascal05.
-Companion (private): `Pascal-Organisation/homelab` → `docs/target-architecture.md` (infrastructure goal).
+Companion: the infrastructure goal lives in the operator's private infrastructure repository (goal IDs `H-*`).
 
 This document defines the state the Pascal-Organisation software supply chain is built towards. It is the yardstick
 for every change: a PR that moves away from a goal below needs a recorded decision (`docs/decisions.md`) that names
 the goal ID and the reason. Current state lives in the README and `docs/*.md`; the path from today to this goal is
-the hardening plan (homelab `docs/hardening-plan.md`, task IDs like `2.2` are referenced below).
+the private roadmap (task IDs like `2.2` are referenced below).
 
 Constraints that shape every goal: **zero cost** (GitHub Free organisation, free/open-source tooling, own hardware),
 **one maintainer**, **security as strict as these constraints allow**.
 
 ## 1. Principles
 
-These principles are canonical here; the homelab goal inherits them.
+These principles are canonical here; the infrastructure goal inherits them.
 
 | ID | Principle | Consequence |
 |---|---|---|
@@ -188,6 +188,6 @@ A runtime may run an own image only if **all** of the following hold; otherwise 
 
 - **Change control:** a PR touching workflows, policies, `renovate/` or `fleet/` states which goal IDs it affects.
   Moving away from a goal requires a decision entry `D-<n>` referencing the goal ID.
-- **Drift:** `fleet-drift.yml` (settings) weekly; the homelab drift checks (live vs git) cover the runtime side.
+- **Drift:** `fleet-drift.yml` (settings) weekly; drift checks in the infrastructure repository (live vs git) cover the runtime side.
 - **Re-audit:** quarterly, re-map the goal tables against live state (read-only), update statuses, record deltas.
 - **Updates to this document:** status changes in the same PR that delivers them; goal changes only with a decision.

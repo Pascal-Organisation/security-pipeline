@@ -5,8 +5,8 @@
 ##
 ##   transport: ssh   ssh <user>@<host> "<command> <sha>" < site.tgz
 ##                    authorized_keys on the target pins the key to a receive script
-##                    (e.g. hugo-receive on CT 107) and to the runner's IP.
-##   transport: ftps  upload every file over FTPS (shared hosting, e.g. all-inkl);
+##                    (e.g. a receive script on the web host) and to the runner's IP.
+##   transport: ftps  upload every file over FTPS (shared hosting);
 ##                    no deletes, ever — a deploy that can delete eventually deletes
 ##                    the wrong thing.
 ##
