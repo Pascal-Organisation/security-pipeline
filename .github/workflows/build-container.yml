@@ -88,7 +88,7 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v3.1.0
+  PIPELINE_VERSION: v3.1.1
   # same pin as in ci.yml (Renovate moves both)
   TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:61757ab62d17b7142f3305e5f5b20bb7cd4012c078c9d1bc2d7e2393fc66c61d
 
@@ -165,7 +165,8 @@ jobs:
           #!/bin/sh
           [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
           # shellcheck disable=SC2086 # TB_RUN_OPTS is set by this workflow, never from an input
-          exec docker run --rm $TB_RUN_OPTS -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
+          # -i keeps stdin open: `echo "$TOKEN" | tb crane auth login --password-stdin` otherwise reads an empty password.
+          exec docker run --rm -i $TB_RUN_OPTS -e HOME=/tmp -e DOCKER_CONFIG -e GITHUB_ACTIONS \
             -e RUNNER_TEMP \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
           EOF
