@@ -37,6 +37,6 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-33 | Licence deny-list gate, `warn` in v3.1.0 and `fail` from the next release; exceptions need an `owner` |
 | D-34 | zizmor online audits on public repos only (read-only token); dependency-review on public PRs |
 | D-35 | Optional OpenVEX file `.security/vex.openvex.json` feeds Trivy; Trivy SARIF goes to code scanning for public repos only |
+| D-40 | Adopt [`target-architecture.md`](target-architecture.md) as the binding architectural goal (principles P1–P10, goal IDs, deploy contract, maturity L1–L3). Changes that move away from a goal need a decision naming the goal ID. |
 
 Full decision rationale: git history of docs/decisions.md before this commit.
-| D-40 | Adopt [`target-architecture.md`](target-architecture.md) as the binding architectural goal (principles P1–P10, goal IDs, deploy contract, maturity L1–L3). Changes that move away from a goal need a decision naming the goal ID. |
