@@ -8,7 +8,15 @@
     ":dependencyDashboard"
   ],
   "timezone": "Europe/Berlin",
-  "minimumReleaseAge": "3 days",
+  "minimumReleaseAge": "7 days",
+  "vulnerabilityAlerts": {
+    "description": "Security fixes skip the release-age wait (the 7-day default is for ordinary updates only) and are labelled so they stand out.",
+    "enabled": true,
+    "minimumReleaseAge": "0 days",
+    "labels": [
+      "security"
+    ]
+  },
   "internalChecksFilter": "strict",
   "prHourlyLimit": 4,
   "packageRules": [
