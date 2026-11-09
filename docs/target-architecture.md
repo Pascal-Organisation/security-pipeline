@@ -35,7 +35,7 @@ flowchart LR
   dev[Maintainer<br/>signed commits, MFA] --> gh[GitHub repos<br/>rulesets, CODEOWNERS]
   gh -->|public repos| hosted[GitHub-hosted runners<br/>ephemeral]
   gh -->|private repos| arc[Self-hosted CI cluster<br/>ephemeral runner per job,<br/>one scale set per trust domain]
-  hosted --> sign[Sign job (GitHub-hosted)<br/>OIDC keyless, Rekor]
+  hosted --> sign["Sign job (GitHub-hosted)<br/>OIDC keyless, Rekor"]
   arc --> sign
   sign --> reg[(GHCR<br/>image + signature +<br/>SBOM + provenance + vuln)]
   reg --> adm{Admission<br/>policy-controller<br/>fail-closed}
