@@ -252,12 +252,13 @@ jobs:
               .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
             ignore=(--ignorefile "$RUNNER_TEMP/scanner-ignore.yaml")
           fi
+          vex=(); [ -f .security/vex.openvex.json ] && vex=(--vex .security/vex.openvex.json)
           cache=(--cache-dir "$RUNNER_TEMP/trivy-cache")
           echo "::group::Full report (not gating)"
-          tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --exit-code 0 "${ignore[@]}"
+          tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --exit-code 0 "${ignore[@]}" "${vex[@]}"
           echo "::endgroup::"
           tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
-            --exit-code 1 --skip-db-update "${ignore[@]}"
+            --exit-code 1 --skip-db-update "${ignore[@]}" "${vex[@]}"
 
       - name: SBOM (CycloneDX)
         run: |
@@ -312,8 +313,10 @@ jobs:
       # the sign job generates it from OIDC claims (see below).
       - name: Trivy vulnerability evidence
         run: |
+          # VEX statements are the one input shared with the gate, so the evidence matches it.
+          vex=(); [ -f .security/vex.openvex.json ] && vex=(--vex .security/vex.openvex.json)
           tb trivy image --cache-dir "$RUNNER_TEMP/trivy-cache" --input "$LAYOUT" --scanners vuln --skip-db-update \
-            --format cosign-vuln --output "$RUNNER_TEMP/attest/vuln.json"
+            --format cosign-vuln --output "$RUNNER_TEMP/attest/vuln.json" "${vex[@]}"
           jq -e '.scanner.result != null and .scanner.uri != null' "$RUNNER_TEMP/attest/vuln.json" > /dev/null
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
