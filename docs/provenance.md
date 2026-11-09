@@ -13,10 +13,9 @@
   `https://cosign.sigstore.dev/attestation/vuln/v1`) with `trivy image --format cosign-vuln` of the exact scanned OCI
   layout (vuln scanner only, no ignore file, unfixed included). It is evidence: the subject is the digest, the JSON
   is not a trust input. Needs the DB already downloaded by the gate step (`--skip-db-update`).
-- **Public repos only** (`needs.gate.outputs.private == 'false'`): additional `actions/attest-build-provenance`
-  (SHA-pinned, `push-to-registry`), needs `attestations: write` on the sign job. Skipped for private repos
-  (GitHub attestations for private repos need Enterprise). Only the sign job (GitHub-hosted, no ci-toolbox) uses it, so the
-  private toolbox does not matter.
+- **Deferred to v4.0.0:** an additional GitHub-generated provenance (`actions/attest-build-provenance`) for public repos.
+  It needs `attestations: write` in every caller's build job, which is a caller contract change (major release);
+  the v3.1.0 canary failed at startup without it (D-41).
 - Fields the cluster CUE policies check are unchanged: `predicateType`, `externalParameters.workflow.repository`
   (`https://github.com/<owner>/<repo>`) and `.ref` (`refs/heads/main`).
 
