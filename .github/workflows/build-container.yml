@@ -252,12 +252,13 @@ jobs:
               .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
             ignore=(--ignorefile "$RUNNER_TEMP/scanner-ignore.yaml")
           fi
+          vex=(); [ -f .security/vex.openvex.json ] && vex=(--vex .security/vex.openvex.json)
           cache=(--cache-dir "$RUNNER_TEMP/trivy-cache")
           echo "::group::Full report (not gating)"
-          tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --exit-code 0 "${ignore[@]}"
+          tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --exit-code 0 "${ignore[@]}" "${vex[@]}"
           echo "::endgroup::"
           tb trivy image "${cache[@]}" --input "$LAYOUT" --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
-            --exit-code 1 --skip-db-update "${ignore[@]}"
+            --exit-code 1 --skip-db-update "${ignore[@]}" "${vex[@]}"
 
       - name: SBOM (CycloneDX)
         run: |
