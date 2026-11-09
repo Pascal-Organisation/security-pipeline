@@ -21,7 +21,7 @@
   "prHourlyLimit": 4,
   "packageRules": [
     {
-      "description": "Small, aged updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR — which release gates such as bahnbot's policy job require.",
+      "description": "Small, aged updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR \u2014 which release gates such as bahnbot's policy job require.",
       "matchUpdateTypes": [
         "minor",
         "patch",
@@ -191,15 +191,14 @@
     },
     {
       "customType": "regex",
-      "description": "Homelab ClusterImagePolicy globs: glob: \"<registry>/<image>@sha256:...\"  # <version>. Same dependency as the image: line in apps/*.yaml (depName normalised: index.docker.io/ and library/ dropped), so both files move in one PR.",
+      "description": "Homelab ClusterImagePolicy globs: glob: \"<registry>/<image>@sha256:...\"  # <version>. Same dependency as the image: line in apps/*.yaml (depName normalised: index.docker.io/ and library/ dropped), so both files move in one PR. No autoReplaceStringTemplate: Renovate fills only its own capture names, so a custom {{prefix}} rendered empty and stripped index.docker.io/ (homelab #60). The default replacement swaps only digest and version inside the match and keeps the prefix.",
       "managerFilePatterns": [
         "/(^|/)Homelab-Skripte/k3s-apps/policies/.+\\.ya?ml$/"
       ],
       "matchStrings": [
         "glob: \"(?<prefix>index\\.docker\\.io/(?:library/)?)?(?<depName>[a-z0-9][a-z0-9._/-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s+# (?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)"
       ],
-      "datasourceTemplate": "docker",
-      "autoReplaceStringTemplate": "glob: \"{{{prefix}}}{{depName}}@{{newDigest}}\"  # {{newValue}}"
+      "datasourceTemplate": "docker"
     }
   ],
   "git-submodules": {
