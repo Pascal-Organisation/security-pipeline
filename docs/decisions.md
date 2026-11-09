@@ -34,4 +34,7 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-31 | DAST always on GitHub-hosted runners |
 | D-32 | Renovate with digest pins, rollout rings and limited automerge |
 
+| D-33 | Public rulesets: signed commits, stale reviews dismissed, threads resolved, strict checks; 0 required approvals (single maintainer; CODEOWNERS documents ownership, review count would block the only maintainer) |
+| D-34 | Org Actions allowlist (`selected`, SHA pinning required, fork-PR approval for all external contributors on public repos) |
+
 Full decision rationale: git history of docs/decisions.md before this commit.
