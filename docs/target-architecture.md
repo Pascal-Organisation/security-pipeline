@@ -63,14 +63,14 @@ Status: **Done** (in a release or live), **Merged** (on `main`, ships with the n
 | ID | Goal | Verify | Status |
 |---|---|---|---|
 | G-S1 | Default branch of every public repo protected by a ruleset: PR required, no force-push/deletion, required check `security-gate`, strict (up-to-date) checks, dismiss stale approvals, conversations resolved, signed commits | `gh api repos/<r>/rulesets/<id>`; `fleet-drift.yml` | Done (approvals = 0, single maintainer → §6) |
-| G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Partial (CODEOWNERS PRs merging) |
+| G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Done (all repos) |
 | G-S3 | Release tags `v*` are signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (immutable releases: owner setting) |
 | G-S4 | Org allows only GitHub-owned actions, `Pascal-Organisation/*` and an explicit list; every `uses:` pinned to a full SHA (org-enforced) | `gh api orgs/<org>/actions/permissions` | Done |
 | G-S5 | Fork PRs from any external contributor need approval before CI runs | repo Actions settings | Done |
 | G-S6 | Secret scanning: push protection on public repos; TruffleHog on every push/PR and full history weekly on all repos | settings + `ci.yml` | Done |
 | G-S7 | Coordinated disclosure: `SECURITY.md`, private vulnerability reporting | repo settings | Done |
-| G-S8 | Weekly drift check of org/repo security settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` run history | PR #37 (needs `FLEET_DRIFT_TOKEN`) |
-| G-S9 | Organisation requires 2FA for all members | org settings | Planned (owner) |
+| G-S8 | Weekly drift check of org/repo security settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` run history | Partial (workflow live; needs `FLEET_DRIFT_TOKEN`) |
+| G-S9 | Organisation requires 2FA for all members | org settings | Done |
 
 ### 4.2 CI execution
 
@@ -79,7 +79,7 @@ Status: **Done** (in a release or live), **Merged** (on `main`, ships with the n
 | G-C1 | Public repos build only on GitHub-hosted runners; `ci.yml` refuses self-hosted for public repos (fail closed) | `ci.yml` visibility gate; runner group settings | Done |
 | G-C2 | Private repos build on **ephemeral, single-job** runners; one scale set and namespace per trust domain | ARC config, runner group repo lists | Partial (one shared namespace → task 3.2) |
 | G-C3 | Runner pods: no Docker daemon, no privileged mode, no host mounts, user namespaces; daemonless rootless builds | runner pod spec | Done (seccomp/AppArmor unconfined for rootless BuildKit → §6, task 3.6) |
-| G-C4 | Runner network: default-deny; egress only DNS + public 443/80; no LAN, no cluster API, no metadata | NetworkPolicy + probe matrix | Planned (task 3.1) |
+| G-C4 | Runner network: default-deny; egress only DNS + public 443/80; no LAN, no cluster API, no metadata | NetworkPolicy + probe matrix | Done (probe matrix OK 2026-11-09) |
 | G-C5 | Every workflow starts with `permissions: {}`; jobs request the minimum; org default token read-only; Actions cannot approve PRs | zizmor, org settings | Done |
 | G-C6 | No `pull_request_target`/`workflow_run` with untrusted checkout; `persist-credentials: false`; `timeout-minutes` everywhere; no expression injection | zizmor (offline + online) | Done |
 | G-C7 | No caches shared across runs or trust domains; fresh BuildKit state per build | workflow review | Done |
@@ -88,11 +88,11 @@ Status: **Done** (in a release or live), **Merged** (on `main`, ships with the n
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-B1 | One required check per repo (`security-gate`) aggregating: workflow lint + security (zizmor online on public), secrets, SAST (CodeQL public / Semgrep + Bandit private), Trivy vuln + misconfig, hadolint | `ci.yml` | Done (zizmor online + dependency review: merged → v3.1.0) |
+| G-B1 | One required check per repo (`security-gate`) aggregating: workflow lint + security (zizmor online on public), secrets, SAST (CodeQL public / Semgrep + Bandit private), Trivy vuln + misconfig, hadolint | `ci.yml` | Done (v3.1.0) |
 | G-B2 | Gate threshold: fixable HIGH/CRITICAL blocks; unfixable reported; licence deny-list (AGPL/GPL-3/SSPL) blocks | job summaries | Partial (licence gate warns in v3.1.0, fails from next release) |
-| G-B3 | Public PRs: dependency review blocks new high-severity vulnerable dependencies | `ci.yml` | Merged → v3.1.0 |
+| G-B3 | Public PRs: dependency review blocks new high-severity vulnerable dependencies | `ci.yml` | Done (v3.1.0) |
 | G-B4 | Inputs pinned: lockfiles with hashes, base images by digest (Renovate-managed), OS security updates applied at build | Dockerfiles, Renovate | Partial (per repo) |
-| G-B5 | Renovate: 7-day cooldown for ordinary updates, 0 days for security fixes, grouped digest bumps for image + policy, registry prefix preserved | `renovate/default.json` | PR #37 (prefix fix planned) |
+| G-B5 | Renovate: 7-day cooldown for ordinary updates, 0 days for security fixes, grouped digest bumps for image + policy, registry prefix preserved | `renovate/default.json` | Done (prefix kept since #41) |
 
 ### 4.4 Artifacts and evidence
 
@@ -100,8 +100,8 @@ Status: **Done** (in a release or live), **Merged** (on `main`, ships with the n
 |---|---|---|---|
 | G-A1 | Every image signed keyless by digest in a separate GitHub-hosted sign job; logged in Rekor | `cosign verify` | Done |
 | G-A2 | CycloneDX SBOM of the exact scanned image, attested | `cosign verify-attestation --type cyclonedx` | Done |
-| G-A3 | SLSA v1 provenance generated by the sign job from OIDC claims + digest (not by the build job); GitHub artifact attestations for public repos with v4.0.0 | `docs/provenance.md` | v3.1.0 (GitHub attestations: v4.0.0) |
-| G-A4 | Vulnerability scan result attested (`cosign-vuln`) for every release | `cosign verify-attestation --type vuln` | Merged → v3.1.0 |
+| G-A3 | SLSA v1 provenance generated by the sign job from OIDC claims + digest (not by the build job); GitHub artifact attestations for public repos with v4.0.0 | `docs/provenance.md` | Done (v3.1.0; GitHub attestations: v4.0.0) |
+| G-A4 | Vulnerability scan result attested (`cosign-vuln`) for every release | `cosign verify-attestation --type vuln` | Done (v3.1.0) |
 | G-A5 | SBOMs continuously re-evaluated (Dependency-Track), EPSS visible | DT project per image | Done (reporting only) |
 | G-A6 | **SLSA Build L3**: provenance from an isolated generator the build cannot influence | — | Planned (stretch, L3) |
 | G-A7 | Reproducible image builds (`SOURCE_DATE_EPOCH`, pinned inputs) | rebuild + diff | Planned (stretch, L3) |
@@ -130,9 +130,9 @@ A runtime may run an own image only if **all** of the following hold; otherwise 
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-V1 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d | `docs/decisions.md` | PR #37 |
-| G-V2 | Exceptions only in `.security/exceptions.json` with `id`, `kind`, `reason`, `owner`, `expires`; expired ones reported | `ci.yml` | Merged → v3.1.0 |
-| G-V3 | Not-affected findings recorded as OpenVEX, applied to all scans | `.security/vex.openvex.json` | Merged → v3.1.0 |
+| G-V1 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d | `docs/decisions.md` | Done |
+| G-V2 | Exceptions only in `.security/exceptions.json` with `id`, `kind`, `reason`, `owner`, `expires`; expired ones reported | `ci.yml` | Done (v3.1.0; owner warns, required in v4.0.0) |
+| G-V3 | Not-affected findings recorded as OpenVEX, applied to all scans | `.security/vex.openvex.json` | Done (v3.1.0) |
 | G-V4 | Running images re-scanned weekly, not only at build | in-cluster job | Planned (task 6.3) |
 
 ### 4.7 Release and operations of the pipeline itself
@@ -142,7 +142,7 @@ A runtime may run an own image only if **all** of the following hold; otherwise 
 | G-R1 | Release order: merge → signed tag → (policy change if needed) → caller pin bumps; consumers match any SHA of `build-container.yml` so releases need no policy edit | `docs/release.md` | Done |
 | G-R2 | Toolbox image private, digest-pinned, rebuilt and signed by `toolbox.yml` | GHCR | Done |
 | G-R3 | OpenSSF Scorecard weekly, results public | `scorecard.yml` | Done |
-| G-R4 | All org settings that matter for security are declared in `fleet/repos.json` | `fleet-drift.yml` | PR #37 |
+| G-R4 | All org settings that matter for security are declared in `fleet/repos.json` | `fleet-drift.yml` | Done |
 
 ## 5. Invariants (never)
 
