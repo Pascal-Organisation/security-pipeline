@@ -10,6 +10,7 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-4 | Release only from a signed merge commit of a PR on `main` |
 | D-5 | Cluster trusts any commit SHA of `build-container.yml` (identity regex); provenance must name the caller repo + `refs/heads/main` (replaced the release-commit allowlist, 2026-11-05) |
 | D-6 | Signed SBOM and provenance, described honestly as SLSA L1 + signature |
+| D-9 | Provenance is generated in the sign job from OIDC claims + digest (not from a build-job file); vuln attestation (Trivy JSON) added; public repos also get GitHub build provenance. Still honestly L1 + signature, see docs/provenance.md |
 | D-7 | Dependency-Track reports, it does not gate |
 | D-8 | Strip guessed CPEs from OS packages in the SBOM |
 | D-9 | The security gate runs once per release |
@@ -33,23 +34,10 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-30 | Static FTPS deploy: GitHub-hosted, checks itself, never deletes |
 | D-31 | DAST always on GitHub-hosted runners |
 | D-32 | Renovate with digest pins, rollout rings and limited automerge |
+| D-33 | Licence deny-list gate, `warn` in v3.1.0 and `fail` from the next release; exceptions need an `owner` |
+| D-34 | zizmor online audits on public repos only (read-only token); dependency-review on public PRs |
+| D-35 | Optional OpenVEX file `.security/vex.openvex.json` feeds Trivy; Trivy SARIF goes to code scanning for public repos only |
+| D-36 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d |
+| D-37 | Weekly drift check of org Actions settings, rulesets and code security against `fleet/repos.json`, read-only token, ntfy on drift |
 
 Full decision rationale: git history of docs/decisions.md before this commit.
-
-## Remediation SLAs (D-33)
-
-Findings from the pipeline gate, Dependabot/Renovate security PRs, Scorecard and audits are fixed within:
-
-| Severity | Fix or accepted exception within |
-|---|---|
-| Critical | 7 days |
-| High | 30 days |
-| Medium | 90 days |
-| Low | best effort, next routine update |
-
-Security updates skip Renovate's 7-day release-age wait (`vulnerabilityAlerts`, label `security`). An exception goes into `.security/exceptions.json` with reason, owner and expiry (D-10); it never outlives the SLA of its severity. Weekly `fleet-drift.yml` (D-34) reports org/repo settings that drifted from `fleet/repos.json`.
-
-| ID | Decision |
-|---|---|
-| D-33 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d |
-| D-34 | Weekly drift check of org Actions settings, rulesets and code security against `fleet/repos.json`, read-only token, ntfy on drift |
