@@ -43,5 +43,6 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-39 | Org Actions allowlist (`selected`, SHA pinning required, fork-PR approval for all external contributors on public repos) |
 | D-40 | Adopt [`target-architecture.md`](target-architecture.md) as the binding architectural goal (principles P1–P10, goal IDs, deploy contract, maturity L1–L3). Changes that move away from a goal need a decision naming the goal ID. |
 | D-41 | v3.1.0 is a minor release: `owner` on exceptions only warns in v3.x and becomes required in v4.0.0 (caller contract change per `release.md`); licence gate default stays `warn` until v3.2.0; `actions/attest-build-provenance` (needs caller `attestations: write`) moves to v4.0.0 |
+| D-42 | v3.2.0: licence gate default `fail` (deny-list AGPL-3.0*/GPL-3.0*/SSPL-1.0, exceptions with `kind: license`). Checked 2026-11-09: no caller had licence findings on v3.1.x |
 
 Full decision rationale: git history of docs/decisions.md before this commit.

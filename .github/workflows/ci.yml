@@ -53,9 +53,9 @@ on:
         type: string
         default: ""
       license-gate:
-        description: "Licence deny-list gate: off | warn | fail. 'warn' in v3.1.0 (lists violations, does not fail); the default becomes 'fail' in the next release."
+        description: "Licence deny-list gate: off | warn | fail. Default 'fail' since v3.2.0 (announced in v3.1.0, D-42)."
         type: string
-        default: "warn"
+        default: "fail"
       license-deny:
         description: "Comma-separated licence names/globs that are denied (SPDX ids, '*' wildcard, case-insensitive)."
         type: string

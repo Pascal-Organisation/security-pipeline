@@ -89,7 +89,7 @@ Status: **Done** (in a release or live), **Merged** (on `main`, ships with the n
 | ID | Goal | Verify | Status |
 |---|---|---|---|
 | G-B1 | One required check per repo (`security-gate`) aggregating: workflow lint + security (zizmor online on public), secrets, SAST (CodeQL public / Semgrep + Bandit private), Trivy vuln + misconfig, hadolint | `ci.yml` | Done (v3.1.0) |
-| G-B2 | Gate threshold: fixable HIGH/CRITICAL blocks; unfixable reported; licence deny-list (AGPL/GPL-3/SSPL) blocks | job summaries | Partial (licence gate warns in v3.1.0, fails from next release) |
+| G-B2 | Gate threshold: fixable HIGH/CRITICAL blocks; unfixable reported; licence deny-list (AGPL/GPL-3/SSPL) blocks | job summaries | Done (v3.2.0, D-42) |
 | G-B3 | Public PRs: dependency review blocks new high-severity vulnerable dependencies | `ci.yml` | Done (v3.1.0) |
 | G-B4 | Inputs pinned: lockfiles with hashes, base images by digest (Renovate-managed), OS security updates applied at build | Dockerfiles, Renovate | Partial (per repo) |
 | G-B5 | Renovate: 7-day cooldown for ordinary updates, 0 days for security fixes, grouped digest bumps for image + policy, registry prefix preserved | `renovate/default.json` | Done (prefix kept since #41) |
