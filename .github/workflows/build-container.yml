@@ -88,7 +88,7 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v3.0.2
+  PIPELINE_VERSION: v3.1.0
   # same pin as in ci.yml (Renovate moves both)
   TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:61757ab62d17b7142f3305e5f5b20bb7cd4012c078c9d1bc2d7e2393fc66c61d
 
@@ -351,7 +351,6 @@ jobs:
     permissions:
       packages: write # push image, signatures and attestations to GHCR
       id-token: write # OIDC token for Sigstore keyless signing (and the claims the provenance is built from)
-      attestations: write # actions/attest-build-provenance (public repos only; the step is skipped otherwise)
     env:
       REF: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
       IMAGE: ${{ needs.build.outputs.image }}
@@ -418,17 +417,6 @@ jobs:
             --certificate-github-workflow-ref refs/heads/main > /dev/null
           docker logout ghcr.io
           echo "Signed $REF (keyless)" >> "$GITHUB_STEP_SUMMARY"
-
-      # Public repositories only: a second, GitHub-generated SLSA v1 provenance (Sigstore public-good instance, also
-      # shown in the repository's attestation list). Private repos would need GitHub Enterprise for this, so the
-      # step is skipped for them; their provenance is the cosign one above. Own login: the step pushes to GHCR itself.
-      - name: GitHub build provenance (public repos)
-        if: needs.gate.outputs.private == 'false'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ env.DIGEST }}
-          push-to-registry: true
 
   # The signed SBOM goes to Dependency-Track, which re-checks it against new CVEs every day.
   # Reporting only: an outage there must never stop a release that is already signed.
