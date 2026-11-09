@@ -45,16 +45,26 @@ Trial jobs `Shell lint (trial)` and `Runtime images (trial)` report only and are
 4. **Trivy image** on the tar: fixable HIGH/CRITICAL and secrets block.
 5. **SBOM:** Syft CycloneDX from the tar; CPEs of `pkg:deb`/`pkg:apk` components are stripped.
 6. **Push** the scanned tar to `ghcr.io/pascal-organisation/<repo>` with crane; fails if the registry digest differs from the tar's manifest digest.
-7. **Provenance:** SLSA v1 predicate (claimed level: Build L1 plus signature).
-8. **Sign:** keyless Cosign signature plus SBOM and provenance attestations, in a GitHub-hosted job that runs no repo code and no scanner.
+7. **Vulnerability evidence:** Trivy JSON (cosign `vuln` format) of the scanned image, passed to the sign job as evidence.
+8. **Sign:** in a GitHub-hosted job that runs no repo code and no scanner: SLSA v1 provenance generated there from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations; public repos additionally get `actions/attest-build-provenance` (details: `docs/provenance.md`).
 9. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
 
 Cluster admission (Sigstore policy-controller, `ClusterImagePolicy` per app) accepts an image only with the
 signature identity `build-container.yml` of this repo, a CycloneDX attestation and a provenance naming the
 repository and `refs/heads/main`.
 
-Exceptions: `.security/exceptions.json` with `id`, `reason`, `expires` (YYYY-MM-DD), optional `kind`
-(`vulnerability` default, `misconfiguration`, `secret`, `license`). After expiry the finding blocks again.
+Exceptions: `.security/exceptions.json` with `id`, `reason`, `owner` (required since v3.1.0: who revisits it),
+`expires` (YYYY-MM-DD), optional `kind` (`vulnerability` default, `misconfiguration`, `secret`, `license`).
+After expiry the finding blocks again. The non-blocking job `Exceptions expiry (report)` lists expired entries
+and those expiring within 14 days as warnings and in the job summary.
+
+Added in v3.1.0 (`ci.yml`):
+
+- **zizmor online audits** on public repos (GitHub-hosted, read-only `GITHUB_TOKEN`): impostor commits, known-vulnerable actions, ref confusion. The offline run stays everywhere.
+- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `warn`) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing; **the default becomes `fail` in the next release**. Exceptions: `kind: "license"`, `id` = licence name or package name.
+- **Dependency review** (`actions/dependency-review-action`, fail on high) on pull requests of public repos; part of `security-gate`.
+- **VEX:** an optional `.security/vex.openvex.json` is passed to Trivy `--vex` (repo scan and image scan).
+- **Trivy SARIF** (HIGH/CRITICAL) uploaded to code scanning on public repos (not for fork PRs; never blocks).
 
 ## Calling the workflows
 
