@@ -74,7 +74,7 @@ env:
 jobs:
   visibility:
     name: Repository visibility
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -185,7 +185,7 @@ jobs:
     name: SAST (public)
     needs: visibility
     if: ${{ needs.visibility.outputs.private == 'false' && inputs.sast-languages != '' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -365,7 +365,7 @@ jobs:
     name: Trivy SARIF (public)
     needs: visibility
     if: ${{ needs.visibility.outputs.private == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -406,7 +406,7 @@ jobs:
     name: Dependency review (public PRs)
     needs: visibility
     if: ${{ github.event_name == 'pull_request' && needs.visibility.outputs.private == 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -550,7 +550,7 @@ jobs:
     name: security-gate
     if: ${{ always() }}
     needs: [visibility, workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile, dependency-review]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
     steps:

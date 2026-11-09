@@ -96,7 +96,7 @@ jobs:
   # A direct push still lands in git on GitHub Free; it just never gets signed.
   policy:
     name: Release policy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read      # the commit and its verification
@@ -347,7 +347,7 @@ jobs:
   sign:
     name: Sign & attest
     needs: [build, gate]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       packages: write # push image, signatures and attestations to GHCR
@@ -424,7 +424,7 @@ jobs:
   sbom-upload:
     name: SBOM to Dependency-Track
     needs: [build, sign]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     continue-on-error: true
     permissions: {}
