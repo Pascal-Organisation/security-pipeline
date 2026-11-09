@@ -10,6 +10,7 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-4 | Release only from a signed merge commit of a PR on `main` |
 | D-5 | Cluster trusts any commit SHA of `build-container.yml` (identity regex); provenance must name the caller repo + `refs/heads/main` (replaced the release-commit allowlist, 2026-11-05) |
 | D-6 | Signed SBOM and provenance, described honestly as SLSA L1 + signature |
+| D-9 | Provenance is generated in the sign job from OIDC claims + digest (not from a build-job file); vuln attestation (Trivy JSON) added; public repos also get GitHub build provenance. Still honestly L1 + signature, see docs/provenance.md |
 | D-7 | Dependency-Track reports, it does not gate |
 | D-8 | Strip guessed CPEs from OS packages in the SBOM |
 | D-9 | The security gate runs once per release |
