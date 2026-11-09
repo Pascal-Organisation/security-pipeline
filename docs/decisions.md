@@ -37,6 +37,8 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-33 | Licence deny-list gate, `warn` in v3.1.0 and `fail` from the next release; exceptions need an `owner` |
 | D-34 | zizmor online audits on public repos only (read-only token); dependency-review on public PRs |
 | D-35 | Optional OpenVEX file `.security/vex.openvex.json` feeds Trivy; Trivy SARIF goes to code scanning for public repos only |
+| D-36 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d |
+| D-37 | Weekly drift check of org Actions settings, rulesets and code security against `fleet/repos.json`, read-only token, ntfy on drift |
 | D-38 | Public rulesets: signed commits, stale reviews dismissed, threads resolved, strict checks; 0 required approvals (single maintainer; CODEOWNERS documents ownership, review count would block the only maintainer) |
 | D-39 | Org Actions allowlist (`selected`, SHA pinning required, fork-PR approval for all external contributors on public repos) |
 
