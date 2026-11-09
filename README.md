@@ -45,8 +45,8 @@ Trial jobs `Shell lint (trial)` and `Runtime images (trial)` report only and are
 4. **Trivy image** on the tar: fixable HIGH/CRITICAL and secrets block.
 5. **SBOM:** Syft CycloneDX from the tar; CPEs of `pkg:deb`/`pkg:apk` components are stripped.
 6. **Push** the scanned tar to `ghcr.io/pascal-organisation/<repo>` with crane; fails if the registry digest differs from the tar's manifest digest.
-7. **Provenance:** SLSA v1 predicate (claimed level: Build L1 plus signature).
-8. **Sign:** keyless Cosign signature plus SBOM and provenance attestations, in a GitHub-hosted job that runs no repo code and no scanner.
+7. **Vulnerability evidence:** Trivy JSON (cosign `vuln` format) of the scanned image, passed to the sign job as evidence.
+8. **Sign:** in a GitHub-hosted job that runs no repo code and no scanner: SLSA v1 provenance generated there from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations; public repos additionally get `actions/attest-build-provenance` (details: `docs/provenance.md`).
 9. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
 
 Cluster admission (Sigstore policy-controller, `ClusterImagePolicy` per app) accepts an image only with the
