@@ -21,7 +21,8 @@
 ## Gates (fail the job): workflow lint (actionlint + zizmor >= medium), verified/unknown
 ## secrets (TruffleHog), SAST errors, fixable HIGH/CRITICAL vulnerabilities and
 ## HIGH/CRITICAL misconfigurations (Trivy), hadolint errors.
-## Report-only: everything below those thresholds, licences.
+## Report-only: everything below those thresholds. Licences: deny-list gate, input `license-gate`
+## (warn in v3.1.0, becomes fail in the next release). Public PRs also get dependency-review.
 name: ci (reusable)
 
 on:
@@ -51,6 +52,14 @@ on:
         description: "Comma-separated directories the dependency/IaC scan should skip (e.g. src/themes)."
         type: string
         default: ""
+      license-gate:
+        description: "Licence deny-list gate: off | warn | fail. 'warn' in v3.1.0 (lists violations, does not fail); the default becomes 'fail' in the next release."
+        type: string
+        default: "warn"
+      license-deny:
+        description: "Comma-separated licence names/globs that are denied (SPDX ids, '*' wildcard, case-insensitive)."
+        type: string
+        default: "AGPL-3.0*,GPL-3.0*,SSPL-1.0"
     outputs:
       private:
         description: "'true' or 'false', from the API. build-container.yml picks its runner with it."
@@ -109,7 +118,7 @@ jobs:
           cat > "$RUNNER_TEMP/tb/tb" <<'EOF'
           #!/bin/sh
           [ -n "${TOOLBOX_NATIVE:-}" ] && exec "$@"
-          exec docker run --rm -e HOME=/tmp -e GITHUB_ACTIONS \
+          exec docker run --rm -e HOME=/tmp -e GITHUB_ACTIONS -e ZIZMOR_GITHUB_TOKEN \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$PWD" "$TOOLBOX" "$@"
           EOF
           chmod 755 "$RUNNER_TEMP/tb/tb"; echo "$RUNNER_TEMP/tb" >> "$GITHUB_PATH"
@@ -126,8 +135,17 @@ jobs:
       - name: actionlint
         run: tb actionlint -color
 
-      - name: zizmor (fail on medium and above)
+      - name: zizmor (offline, fail on medium and above)
         run: tb zizmor --offline --min-severity medium .github/workflows/
+
+      # Public repos only (GitHub-hosted): the online audits ask the GitHub API about the actions a
+      # workflow uses (impostor commits, known-vulnerable actions, ref confusion, stale pins). The token
+      # is this job's GITHUB_TOKEN, contents: read only, and is handed to this one step.
+      - name: zizmor (online audits, public repos)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        env:
+          ZIZMOR_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tb zizmor --min-severity medium .github/workflows/
 
   secrets:
     name: Secrets
@@ -277,22 +295,173 @@ jobs:
             jq -e 'all(.exceptions[];
                 (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
                 and (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+                and ((.owner | type) == "string" and (.owner | length > 0))
                 and ((.kind // "vulnerability") | IN("vulnerability", "misconfiguration", "secret", "license")))' \
               .security/exceptions.json > /dev/null \
-              || { echo "::error::.security/exceptions.json: every entry needs id, reason, expires (YYYY-MM-DD) and a known kind"; exit 1; }
+              || { echo "::error::.security/exceptions.json: every entry needs id, reason, owner, expires (YYYY-MM-DD) and a known kind"; exit 1; }
             jq -r '.exceptions | group_by(.kind // "vulnerability")[] |
                 (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
                 (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
               .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
             ignore=(--ignorefile "$RUNNER_TEMP/scanner-ignore.yaml")
           fi
+          # Optional OpenVEX statements (.security/vex.openvex.json): "not affected" findings are suppressed.
+          vex=()
+          if [ -f .security/vex.openvex.json ]; then
+            jq -e '(.statements | type) == "array"' .security/vex.openvex.json > /dev/null \
+              || { echo "::error::.security/vex.openvex.json is not an OpenVEX document"; exit 1; }
+            vex=(--vex .security/vex.openvex.json)
+          fi
           # Cache per run: never shared between jobs.
           cache=(--cache-dir "$RUNNER_TEMP/trivy-cache")
           echo "::group::Full report (not gating)"
-          tb trivy fs "${cache[@]}" --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" .
+          tb trivy fs "${cache[@]}" --scanners vuln,misconfig,license --license-full --exit-code 0 "${skip[@]}" "${ignore[@]}" "${vex[@]}" .
           echo "::endgroup::"
           tb trivy fs "${cache[@]}" --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed \
-            --exit-code 1 --skip-db-update "${skip[@]}" "${ignore[@]}" .
+            --exit-code 1 --skip-db-update "${skip[@]}" "${ignore[@]}" "${vex[@]}" .
+
+      # Licence deny-list. Package licences come from the manifests/lock files Trivy reads. An exception
+      # (kind "license") matches the licence name or the package name. warn = list only, fail = block.
+      - name: Licence gate (${{ inputs.license-gate }})
+        if: ${{ !cancelled() && inputs.license-gate != 'off' }}
+        env:
+          MODE: ${{ inputs.license-gate }}
+          DENY: ${{ inputs.license-deny }}
+          SKIP_DIRS: ${{ inputs.scan-skip-dirs }}
+        run: |
+          case "$MODE" in warn|fail) ;; *) echo "::error::license-gate must be off, warn or fail"; exit 1;; esac
+          case "$DENY" in ""|*[!A-Za-z0-9.,*+_-]*) echo "::error::license-deny is empty or has unexpected characters"; exit 1;; esac
+          case "$SKIP_DIRS" in *[!A-Za-z0-9_./,-]*) echo "::error::scan-skip-dirs has unexpected characters"; exit 1;; esac
+          skip=() ; [ -n "$SKIP_DIRS" ] && skip=(--skip-dirs "$SKIP_DIRS")
+          out="$RUNNER_TEMP/license.json"
+          tb trivy fs --cache-dir "$RUNNER_TEMP/trivy-cache" --scanners license --format json --output "$out" "${skip[@]}" .
+          exc='[]'
+          [ -f .security/exceptions.json ] && exc="$(jq -c --arg today "$(date -u +%F)" \
+            '[.exceptions[]? | select((.kind // "") == "license" and ((.expires // "") >= $today)) | .id]' .security/exceptions.json)"
+          jq -r --arg deny "$DENY" --argjson exc "$exc" '
+            ($deny | split(",") | map(gsub("\\."; "\\.") | gsub("\\+"; "\\+") | gsub("\\*"; ".*") | "^" + . + "$")) as $pats
+            | [.Results[]? | .Licenses[]?
+               | select(.Name as $n | any($pats[]; . as $p | $n | test($p; "i")))
+               | select((.Name | IN($exc[]) | not) and ((.PkgName // "") | IN($exc[]) | not))]
+            | unique_by(.PkgName + "|" + .Name)[] | "\(.Name)\t\(.PkgName // .FilePath)"' "$out" > "$RUNNER_TEMP/license-hits.txt"
+          n="$(wc -l < "$RUNNER_TEMP/license-hits.txt")"
+          {
+            echo "### Licence gate ($MODE): $n denied licence finding(s)"
+            echo "Deny-list: \`$DENY\`"
+            while IFS=$'\t' read -r lic pkg; do echo "- \`$lic\` in \`$pkg\`"; done < "$RUNNER_TEMP/license-hits.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$n" -eq 0 ] && exit 0
+          cat "$RUNNER_TEMP/license-hits.txt"
+          if [ "$MODE" = fail ]; then
+            echo "::error::$n denied licence finding(s); fix them or add a kind=license exception with owner and expiry"; exit 1
+          fi
+          echo "::warning::$n denied licence finding(s). This gate is in warn mode and becomes fail in the next pipeline release."
+
+  # Public repos only: Trivy findings in the Security tab. Needs security-events: write, so it is its
+  # own job. Not part of security-gate (the gating scan is in `dependencies`); never blocks.
+  trivy-sarif:
+    name: Trivy SARIF (public)
+    needs: visibility
+    if: ${{ needs.visibility.outputs.private == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read # pull the private ci-toolbox on GitHub-hosted runners
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - *toolbox
+      - name: Trivy fs (SARIF)
+        env:
+          SKIP_DIRS: ${{ inputs.scan-skip-dirs }}
+        run: |
+          case "$SKIP_DIRS" in *[!A-Za-z0-9_./,-]*) echo "::error::scan-skip-dirs has unexpected characters"; exit 1;; esac
+          skip=() ; [ -n "$SKIP_DIRS" ] && skip=(--skip-dirs "$SKIP_DIRS")
+          ignore=() ; vex=()
+          if [ -f .security/exceptions.json ]; then
+            # validated in the `dependencies` job
+            jq -r '.exceptions | group_by(.kind // "vulnerability")[] |
+                (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
+                (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
+              .security/exceptions.json > "$RUNNER_TEMP/scanner-ignore.yaml"
+            ignore=(--ignorefile "$RUNNER_TEMP/scanner-ignore.yaml")
+          fi
+          [ -f .security/vex.openvex.json ] && vex=(--vex .security/vex.openvex.json)
+          mkdir -p "$RUNNER_TEMP/sarif"
+          tb trivy fs --cache-dir "$RUNNER_TEMP/trivy-cache" --scanners vuln,misconfig --severity HIGH,CRITICAL \
+            --format sarif --output "$RUNNER_TEMP/sarif/trivy.sarif" --exit-code 0 "${skip[@]}" "${ignore[@]}" "${vex[@]}" .
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        continue-on-error: true # code scanning may be off for the repo; the gate is `dependencies`
+        with:
+          sarif_file: ${{ runner.temp }}/sarif/trivy.sarif
+          category: trivy-fs
+
+  # 2.5: vulnerable or disallowed new dependencies in a PR (public repos: the dependency graph is free).
+  dependency-review:
+    name: Dependency review (public PRs)
+    needs: visibility
+    if: ${{ github.event_name == 'pull_request' && needs.visibility.outputs.private == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The action fails with "not supported" when GitHub recognises no manifest in the repo (the SBOM
+      # endpoint answers 404). That is not a finding: say so and skip. Any other probe error fails the job.
+      - id: graph
+        name: Probe the dependency graph
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/dependency-graph/sbom")"
+          case "$code" in
+            200) echo "available=true" >> "$GITHUB_OUTPUT" ;;
+            404)
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Dependency review skipped::no manifests the dependency graph supports in this repository"
+              echo "Dependency review skipped: no supported manifests (dependency graph SBOM returned 404)." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::dependency graph probe returned HTTP $code"; exit 1 ;;
+          esac
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: ${{ steps.graph.outputs.available == 'true' }}
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
+  # 2.7: report only (not in security-gate's needs). An expired exception already makes the finding block
+  # again in `dependencies`; this lists them, and those about to expire, so they get revisited.
+  exceptions-expiry:
+    name: Exceptions expiry (report)
+    needs: visibility
+    runs-on: ${{ needs.visibility.outputs.private == 'true' && inputs.runner || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: List expired and soon-expiring exceptions
+        run: |
+          [ -f .security/exceptions.json ] || { echo "no exceptions file"; exit 0; }
+          today="$(date -u +%F)"; soon="$(date -u -d '+14 days' +%F)"
+          jq -r --arg today "$today" --arg soon "$soon" '.exceptions[]?
+              | select((.expires // "") < $soon)
+              | (if .expires < $today then "EXPIRED" else "expires soon" end) + "\t\(.id)\t\(.expires)\t\(.owner // "NO OWNER")"' \
+            .security/exceptions.json | sort > "$RUNNER_TEMP/expiry.txt"
+          [ -s "$RUNNER_TEMP/expiry.txt" ] || { echo "no exception is expired or expiring within 14 days"; exit 0; }
+          {
+            echo "### Exceptions needing attention"
+            while IFS=$'\t' read -r state id exp owner; do echo "- **$state** \`$id\` ($exp), owner: $owner"; done < "$RUNNER_TEMP/expiry.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r state id exp owner; do echo "::warning title=Exception $state::$id ($exp), owner: $owner"; done < "$RUNNER_TEMP/expiry.txt"
 
   dockerfile:
     name: Dockerfile lint
@@ -378,7 +547,7 @@ jobs:
   security-gate:
     name: security-gate
     if: ${{ always() }}
-    needs: [visibility, workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile]
+    needs: [visibility, workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile, dependency-review]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -390,6 +559,6 @@ jobs:
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
           jq -e '[to_entries[] | select(.value.result != "success"
                     and (.value.result != "skipped"
-                         or (.key | IN("sast-public", "sast-private", "sast-python", "dockerfile") | not)))]
+                         or (.key | IN("sast-public", "sast-private", "sast-python", "dockerfile", "dependency-review") | not)))]
                  | length == 0' <<< "$RESULTS" > /dev/null \
             || { echo "::error::security gate failed"; exit 1; }
