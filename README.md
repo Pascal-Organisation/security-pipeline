@@ -110,6 +110,8 @@ Signing, DAST and the FTPS upload always run GitHub-hosted. Details: [docs/runne
 
 | Doc | Content |
 |---|---|
+| [docs/target-architecture.md](docs/target-architecture.md) | Architectural goal: principles, goal IDs with status, deploy contract, maturity levels |
+| [docs/provenance.md](docs/provenance.md) | What the provenance and attestations contain, and the honest SLSA level |
 | [docs/new-project.md](docs/new-project.md) | Create and register a new repository |
 | [docs/release.md](docs/release.md) | Releasing the pipeline |
 | [docs/runners.md](docs/runners.md) | Runner groups and isolation rules |
