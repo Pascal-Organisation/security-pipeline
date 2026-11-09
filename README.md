@@ -62,7 +62,7 @@ and those expiring within 14 days as warnings and in the job summary.
 Added in v3.1.0 (`ci.yml`):
 
 - **zizmor online audits** on public repos (GitHub-hosted, read-only `GITHUB_TOKEN`): impostor commits, known-vulnerable actions, ref confusion. The offline run stays everywhere.
-- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `warn`) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing; **the default becomes `fail` in the next release**. Exceptions: `kind: "license"`, `id` = licence name or package name.
+- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `fail` since v3.2.0) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing; **the default becomes `fail` in the next release**. Exceptions: `kind: "license"`, `id` = licence name or package name.
 - **Dependency review** (`actions/dependency-review-action`, fail on high) on pull requests of public repos; part of `security-gate`.
 - **VEX:** an optional `.security/vex.openvex.json` is passed to Trivy `--vex` (repo scan and image scan).
 - **Trivy SARIF** (HIGH/CRITICAL) uploaded to code scanning on public repos (not for fork PRs; never blocks).
