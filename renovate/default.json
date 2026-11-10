@@ -138,6 +138,16 @@
         "digest"
       ],
       "enabled": false
+    },
+    {
+      "description": "GitHub-hosted runner image majors (e.g. ubuntu-24.04 \u2192 ubuntu-26.04) are deliberate, tested changes: the public build path depends on runner specifics.",
+      "matchDatasources": [
+        "github-runners"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
   ],
   "customManagers": [
@@ -190,5 +200,6 @@
       "before 6am on monday"
     ],
     "automerge": true
-  }
+  },
+  "dependencyDashboard": false
 }
