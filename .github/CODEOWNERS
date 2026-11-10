@@ -1,0 +1,5 @@
+# Default owner and explicit owners for security-sensitive paths.
+*                                   @pascal05
+/.github/                           @pascal05
+/toolbox/                           @pascal05
+/renovate/                          @pascal05

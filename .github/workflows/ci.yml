@@ -53,9 +53,9 @@ on:
         type: string
         default: ""
       license-gate:
-        description: "Licence deny-list gate: off | warn | fail. 'warn' in v3.1.0 (lists violations, does not fail); the default becomes 'fail' in the next release."
+        description: "Licence deny-list gate: off | warn | fail. Default 'fail' since v3.2.0 (announced in v3.1.0, D-42)."
         type: string
-        default: "warn"
+        default: "fail"
       license-deny:
         description: "Comma-separated licence names/globs that are denied (SPDX ids, '*' wildcard, case-insensitive)."
         type: string
@@ -295,10 +295,12 @@ jobs:
             jq -e 'all(.exceptions[];
                 (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
                 and (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
-                and ((.owner | type) == "string" and (.owner | length > 0))
                 and ((.kind // "vulnerability") | IN("vulnerability", "misconfiguration", "secret", "license")))' \
               .security/exceptions.json > /dev/null \
-              || { echo "::error::.security/exceptions.json: every entry needs id, reason, owner, expires (YYYY-MM-DD) and a known kind"; exit 1; }
+              || { echo "::error::.security/exceptions.json: every entry needs id, reason, expires (YYYY-MM-DD) and a known kind"; exit 1; }
+            # owner: recommended in v3.x (warning), required from v4.0.0 (caller contract change, docs/release.md)
+            jq -r '.exceptions[] | select(((.owner // "") | type) != "string" or ((.owner // "") | length) == 0) | .id' \
+              .security/exceptions.json | while read -r id; do echo "::warning title=Exception without owner::$id (owner becomes required in v4.0.0)"; done
             jq -r '.exceptions | group_by(.kind // "vulnerability")[] |
                 (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
                 (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \

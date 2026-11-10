@@ -8,12 +8,20 @@
     ":dependencyDashboard"
   ],
   "timezone": "Europe/Berlin",
-  "minimumReleaseAge": "3 days",
+  "minimumReleaseAge": "7 days",
+  "vulnerabilityAlerts": {
+    "description": "Security fixes skip the release-age wait (the 7-day default is for ordinary updates only) and are labelled so they stand out.",
+    "enabled": true,
+    "minimumReleaseAge": "0 days",
+    "labels": [
+      "security"
+    ]
+  },
   "internalChecksFilter": "strict",
   "prHourlyLimit": 4,
   "packageRules": [
     {
-      "description": "Small, aged updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR — which release gates such as bahnbot's policy job require.",
+      "description": "Small, aged updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR \u2014 which release gates such as bahnbot's policy job require.",
       "matchUpdateTypes": [
         "minor",
         "patch",
@@ -132,14 +140,14 @@
       "enabled": false
     },
     {
-      "description": "Homelab third-party images: the image: line in apps/*.yaml and the ClusterImagePolicy glob must change together, or the admission policy denies the new digest. One branch per image and current tag, covering both files.",
-      "matchFileNames": [
-        "Homelab-Skripte/k3s-apps/**"
-      ],
+      "description": "GitHub-hosted runner image majors (e.g. ubuntu-24.04 \u2192 ubuntu-26.04) are deliberate, tested changes: the public build path depends on runner specifics.",
       "matchDatasources": [
-        "docker"
+        "github-runners"
       ],
-      "groupName": "k3s third-party {{{depName}}} {{{currentValue}}}"
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
   ],
   "customManagers": [
@@ -168,30 +176,6 @@
       "depNameTemplate": "projectdiscovery/nuclei-templates",
       "datasourceTemplate": "github-tags",
       "autoReplaceStringTemplate": "NUCLEI_TEMPLATES_REF: \"{{newValue}}\"\n  NUCLEI_TEMPLATES_SHA: {{newDigest}}"
-    },
-    {
-      "customType": "regex",
-      "description": "Homelab k3s manifests: third-party images pinned as image: name@sha256:... with the version in a trailing comment (the kubernetes manager cannot read that version).",
-      "managerFilePatterns": [
-        "/(^|/)Homelab-Skripte/k3s-apps/.+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "image: (?<depName>[a-z0-9][a-z0-9._/-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\\s+# (?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)"
-      ],
-      "datasourceTemplate": "docker",
-      "autoReplaceStringTemplate": "image: {{depName}}@{{newDigest}}  # {{newValue}}"
-    },
-    {
-      "customType": "regex",
-      "description": "Homelab ClusterImagePolicy globs: glob: \"<registry>/<image>@sha256:...\"  # <version>. Same dependency as the image: line in apps/*.yaml (depName normalised: index.docker.io/ and library/ dropped), so both files move in one PR.",
-      "managerFilePatterns": [
-        "/(^|/)Homelab-Skripte/k3s-apps/policies/.+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "glob: \"(?<prefix>index\\.docker\\.io/(?:library/)?)?(?<depName>[a-z0-9][a-z0-9._/-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s+# (?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)"
-      ],
-      "datasourceTemplate": "docker",
-      "autoReplaceStringTemplate": "glob: \"{{{prefix}}}{{depName}}@{{newDigest}}\"  # {{newValue}}"
     }
   ],
   "git-submodules": {
@@ -217,9 +201,5 @@
     ],
     "automerge": true
   },
-  "kubernetes": {
-    "managerFilePatterns": [
-      "/(^|/)Homelab-Skripte/k3s-apps/.+\\.ya?ml$/"
-    ]
-  }
+  "dependencyDashboard": false
 }

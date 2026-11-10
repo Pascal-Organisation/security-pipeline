@@ -3,6 +3,7 @@
 Reusable GitHub Actions workflows (security gate, signed container release, DAST, static deploy) for the
 Pascal-Organisation repositories. Callers pin a release commit; tools and policy live only here.
 
+Architectural goal: [`docs/target-architecture.md`](docs/target-architecture.md) — principles, goal states, deploy contract, maturity levels.
 Current release: see [`VERSION`](VERSION). Fleet: [`fleet/repos.json`](fleet/repos.json), live state via
 `tools/fleet-status.sh`. Vulnerability reports: [SECURITY.md](SECURITY.md).
 
@@ -46,7 +47,7 @@ Trial jobs `Shell lint (trial)` and `Runtime images (trial)` report only and are
 5. **SBOM:** Syft CycloneDX from the tar; CPEs of `pkg:deb`/`pkg:apk` components are stripped.
 6. **Push** the scanned tar to `ghcr.io/pascal-organisation/<repo>` with crane; fails if the registry digest differs from the tar's manifest digest.
 7. **Vulnerability evidence:** Trivy JSON (cosign `vuln` format) of the scanned image, passed to the sign job as evidence.
-8. **Sign:** in a GitHub-hosted job that runs no repo code and no scanner: SLSA v1 provenance generated there from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations; public repos additionally get `actions/attest-build-provenance` (details: `docs/provenance.md`).
+8. **Sign:** in a GitHub-hosted job that runs no repo code and no scanner: SLSA v1 provenance generated there from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations; GitHub artifact attestations for public repos are deferred to v4.0.0 (they need `attestations: write` from every caller; details: `docs/provenance.md`).
 9. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
 
 Cluster admission (Sigstore policy-controller, `ClusterImagePolicy` per app) accepts an image only with the
@@ -61,7 +62,7 @@ and those expiring within 14 days as warnings and in the job summary.
 Added in v3.1.0 (`ci.yml`):
 
 - **zizmor online audits** on public repos (GitHub-hosted, read-only `GITHUB_TOKEN`): impostor commits, known-vulnerable actions, ref confusion. The offline run stays everywhere.
-- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `warn`) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing; **the default becomes `fail` in the next release**. Exceptions: `kind: "license"`, `id` = licence name or package name.
+- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `fail` since v3.2.0) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing; **the default becomes `fail` in the next release**. Exceptions: `kind: "license"`, `id` = licence name or package name.
 - **Dependency review** (`actions/dependency-review-action`, fail on high) on pull requests of public repos; part of `security-gate`.
 - **VEX:** an optional `.security/vex.openvex.json` is passed to Trivy `--vex` (repo scan and image scan).
 - **Trivy SARIF** (HIGH/CRITICAL) uploaded to code scanning on public repos (not for fork PRs; never blocks).
@@ -109,6 +110,8 @@ Signing, DAST and the FTPS upload always run GitHub-hosted. Details: [docs/runne
 
 | Doc | Content |
 |---|---|
+| [docs/target-architecture.md](docs/target-architecture.md) | Architectural goal: principles, goal IDs with status, deploy contract, maturity levels |
+| [docs/provenance.md](docs/provenance.md) | What the provenance and attestations contain, and the honest SLSA level |
 | [docs/new-project.md](docs/new-project.md) | Create and register a new repository |
 | [docs/release.md](docs/release.md) | Releasing the pipeline |
 | [docs/runners.md](docs/runners.md) | Runner groups and isolation rules |

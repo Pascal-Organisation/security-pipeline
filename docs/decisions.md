@@ -37,5 +37,12 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-33 | Licence deny-list gate, `warn` in v3.1.0 and `fail` from the next release; exceptions need an `owner` |
 | D-34 | zizmor online audits on public repos only (read-only token); dependency-review on public PRs |
 | D-35 | Optional OpenVEX file `.security/vex.openvex.json` feeds Trivy; Trivy SARIF goes to code scanning for public repos only |
+| D-36 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d |
+| D-37 | Weekly drift check of org Actions settings, rulesets and code security against `fleet/repos.json`, read-only token, ntfy on drift |
+| D-38 | Public rulesets: signed commits, stale reviews dismissed, threads resolved, strict checks; 0 required approvals (single maintainer; CODEOWNERS documents ownership, review count would block the only maintainer) |
+| D-39 | Org Actions allowlist (`selected`, SHA pinning required, fork-PR approval for all external contributors on public repos) |
+| D-40 | Adopt [`target-architecture.md`](target-architecture.md) as the binding architectural goal (principles P1–P10, goal IDs, deploy contract, maturity L1–L3). Changes that move away from a goal need a decision naming the goal ID. |
+| D-41 | v3.1.0 is a minor release: `owner` on exceptions only warns in v3.x and becomes required in v4.0.0 (caller contract change per `release.md`); licence gate default stays `warn` until v3.2.0; `actions/attest-build-provenance` (needs caller `attestations: write`) moves to v4.0.0 |
+| D-42 | v3.2.0: licence gate default `fail` (deny-list AGPL-3.0*/GPL-3.0*/SSPL-1.0, exceptions with `kind: license`). Checked 2026-11-09: no caller had licence findings on v3.1.x |
 
 Full decision rationale: git history of docs/decisions.md before this commit.

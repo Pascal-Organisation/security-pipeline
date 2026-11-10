@@ -1,0 +1,48 @@
+name: fleet-drift
+
+# Weekly: do the live org Actions settings, public-repo rulesets and code-security features
+# still match fleet/repos.json? Fails (and pings ntfy) when not. Read-only.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fleet-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Compare settings with fleet/repos.json
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare
+        env:
+          GH_TOKEN: ${{ secrets.FLEET_DRIFT_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::secret FLEET_DRIFT_TOKEN is missing - see the operator secret inventory (private)"; exit 2
+          fi
+          set -o pipefail
+          tools/fleet-drift.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify (ntfy)
+        if: ${{ failure() }}
+        env:
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+        run: |
+          if [ -n "$NTFY_URL" ]; then
+            curl -fsS --max-time 10 -H "Title: fleet-drift: settings differ from fleet/repos.json" -H "Tags: rotating_light" \
+              -d "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$NTFY_URL" > /dev/null || echo "::warning::ntfy failed"
+          else
+            echo "::warning::NTFY_URL secret not set, no notification sent"
+          fi
