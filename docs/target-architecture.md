@@ -122,7 +122,7 @@ A runtime may run an own image only if **all** of the following hold; otherwise 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
 | G-D1 | Contract items 1–3, 5, 6 enforced at admission, fail-closed, no-match = deny | ClusterImagePolicies | Done |
-| G-D2 | Contract items 2 (builder.id, event) and 4 enforced | ClusterImagePolicies | Planned (task 2.11, after v3.1.0) |
+| G-D2 | Contract items 2 (builder.id, event) and 4 enforced | ClusterImagePolicies | Done (enforced on the app cluster 2026-11-09) |
 | G-D3 | Deploys are pull-based (the runtime fetches newer signed builds); CI never holds runtime credentials | updater design | Done |
 | G-D4 | Desired state of runtime manifests reconciled from git (GitOps) | — | Planned (stretch, L3) |
 
