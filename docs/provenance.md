@@ -47,6 +47,7 @@ but would still attest the digest handed in by the same run. L2/L3 are not claim
 
 ## Rollout
 
-Extra attestations do not break admission (policies select by `predicateType`). Public repos carry two
-`slsa.dev/provenance/v1` attestations; both name the caller repo and `refs/heads/main`, so the CUE check passes.
-Verify with a canary image before relying on it.
+Today every image carries one `slsa.dev/provenance/v1` attestation, the one from the sign job. When the GitHub-generated
+attestation for public repos arrives in v4.0.0 (D-41), those images will carry two. Extra attestations do not break
+admission (policies select by `predicateType`), and both name the caller repo and `refs/heads/main`, so the CUE check
+passes. Verify with a canary image before relying on it.

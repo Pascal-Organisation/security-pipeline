@@ -11,8 +11,8 @@ Vulnerability reports: [SECURITY.md](SECURITY.md).
 
 | File | Purpose | Trigger | Key inputs | Secrets |
 |---|---|---|---|---|
-| `ci.yml` | Security gate; one required check `Security / security-gate` | `workflow_call` | `runner`, `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` | none |
-| `build-container.yml` | Release policy, gate, build (untrusted), scan, SBOM, push (trusted), sign | `workflow_call` (push to `main`) | `runner`, `context`, `dockerfile`, `target`, `submodules` + the `ci.yml` inputs; outputs `image`, `digest` | optional `DTRACK_API_KEY`, `DTRACK_ACCESS_CLIENT_ID`, `DTRACK_ACCESS_CLIENT_SECRET` |
+| `ci.yml` | Security gate; one required check `Security / security-gate` | `workflow_call` | `runner`, `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs`, `license-gate`, `license-deny`; output `private` | none |
+| `build-container.yml` | Release policy, gate, build (untrusted), scan, SBOM, push (trusted), sign | `workflow_call` (push to `main`) | `runner`, `context`, `dockerfile`, `target`, `submodules`, and the gate inputs `sast-languages`, `python-paths`, `scan-skip-dirs` (`license-gate` and `license-deny` are not forwarded: the release gate always uses their defaults); outputs `image`, `digest` | optional `DTRACK_API_KEY`, `DTRACK_ACCESS_CLIENT_ID`, `DTRACK_ACCESS_CLIENT_SECRET` |
 | `deploy-static.yml` | Ship a `.tgz` artifact over `ssh` or `ftps`; never deletes; private repos only | `workflow_call` | `transport` (required), `artifact-file`, `required-file`, `ftps-remote-dir`, `environment`, `url`, `deploy-runner` (default `["self-hosted","deploy"]`) | `ftp-host`, `ftp-user`, `ftp-pass` (ftps); `deploy-ssh-key`, `deploy-known-hosts` (ssh); `ntfy-url` |
 | `dast.yml` | ZAP baseline + Nuclei against a public URL; GitHub-hosted | `workflow_call` | `url` (required), `zap-minutes` (default 2) | none |
 | `toolbox.yml` | Build, scan, sign the `ci-toolbox` image | PR/push on `toolbox/**` | none | none |
@@ -30,7 +30,7 @@ Vulnerability reports: [SECURITY.md](SECURITY.md).
 | Workflow lint | actionlint | any error | all |
 | Workflow security | zizmor | >= medium | all |
 | Secrets | TruffleHog (diff on PR/push, full history on schedule) | verified + unknown | all |
-| SAST | CodeQL (`security-extended`) | alerts only | public |
+| SAST | CodeQL (`security-extended`) | nothing: alerts go to code scanning, the job does not fail on them | public |
 | SAST | Semgrep `p/default` | severity ERROR | private |
 | SAST (Python) | Bandit | high severity, confidence >= medium | private, with `python-paths` |
 | Dependencies and IaC | Trivy fs | fixable HIGH/CRITICAL (vuln, misconfig) | all |
@@ -43,7 +43,7 @@ Trial jobs `Shell lint (trial)` and `Runtime images (trial)` only report.
 1. **Release policy:** ref is `refs/heads/main`; commit is GitHub-verified and the merge result of a PR into `main`.
 2. **Gate:** `ci.yml`.
 3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted). The only job that runs repo code; read-only token.
-4. **Publish** (GitHub-hosted, no repo code): re-computes the tar's digests, then scans it with Trivy (fixable HIGH/CRITICAL and secrets block), creates the Syft CycloneDX SBOM (CPEs of `pkg:deb`/`pkg:apk` stripped), pushes it with crane to `ghcr.io/pascal-organisation/<repo>` (fails if the registry digest differs from the tar's) and produces Trivy JSON as vulnerability evidence.
+4. **Publish** (GitHub-hosted, no repo code): re-computes the tar's digests, then scans it with Trivy (fixable HIGH/CRITICAL and secrets block), creates the Syft CycloneDX SBOM (CPEs of `pkg:deb`/`pkg:apk`/`pkg:rpm` stripped), pushes it with crane to `ghcr.io/pascal-organisation/<repo>` (fails if the registry digest differs from the tar's) and produces Trivy JSON as vulnerability evidence.
 5. **Sign** (GitHub-hosted, no repo code, no scanner): SLSA v1 provenance from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations. GitHub artifact attestations for public repos wait for v4.0.0 ([docs/provenance.md](docs/provenance.md)).
 6. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
 
@@ -101,7 +101,7 @@ names above, the workflow path `build-container.yml` (it is the signing identity
 | Public | GitHub-hosted only; visibility is read from the API, never from an input |
 | Private | Self-hosted ARC scale sets (input `runner`, default `arc-ci`), one fresh pod per job |
 
-Signing, DAST and the FTPS upload always run GitHub-hosted. See [docs/runners.md](docs/runners.md).
+Publish (scan, SBOM, push), signing, DAST and the FTPS upload always run GitHub-hosted. See [docs/runners.md](docs/runners.md).
 
 ## Other docs
 

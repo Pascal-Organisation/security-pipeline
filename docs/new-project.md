@@ -6,17 +6,17 @@
 gh repo create Pascal-Organisation/<name> --template Pascal-Organisation/app-template --private --clone
 ```
 
-The template (`container-pull` profile) contains: `Dockerfile` (digest-pinned base, non-root user, `runtime` stage), `www/` placeholder app, `.github/workflows/ci.yml` (calls `ci.yml`, job `Security`) and `release.yml` (calls `build-container.yml`, `target: runtime`), `renovate.json` (shared preset), `.pre-commit-config.yaml`, `SECURITY.md`. Pins are full SHAs with a `# vX.Y.Z` comment.
+The template (`container-pull` profile) contains: `Dockerfile` (digest-pinned base, non-root user, `runtime` stage), placeholder Python app (`src/app/`, `tests/`, `requirements.lock`), `deploy/k8s/` example manifests, `.security/exceptions.json` example, `.github/CODEOWNERS`, `.github/workflows/ci.yml` (calls `ci.yml`, job `Security`) and `release.yml` (calls `build-container.yml`, `target: runtime`), `renovate.json` (shared preset), `.pre-commit-config.yaml`, `SECURITY.md`. Pins are full SHAs with a `# vX.Y.Z` comment.
 
-1. In the clone: replace every `CHANGEME`, the placeholder app in `www/` and `Dockerfile`, and the README text.
+1. In the clone: replace every `CHANGEME`, the placeholder app (`src/app/`, `tests/`, `Dockerfile`), the `deploy/k8s/` manifests, the example in `.security/exceptions.json` and the README text.
 2. Workflow inputs: `sast-languages` (public only), `python-paths` (private only), `runner: arc-<name>` (private repo with its own scale set; default `arc-ci`). Keep `sast-languages` identical in `ci.yml` and `release.yml`.
 3. Register the repo (PR to this repo) in `fleet/repos.json`:
 
    ```json
-   { "name": "<name>", "profile": "container-pull", "ring": "stable", "gate_check": "Security / security-gate" }
+   { "name": "<name>", "profile": "container-pull", "ring": "stable", "gate_check": "Security / security-gate", "visibility": "private" }
    ```
 
-   Profiles: `ci-only`, `container-pull`, `static-ftps`. `ring` is `canary` or `stable`; `canary` must match the repos in `renovate/default.json`. Optional: `extra_required_checks`, `rulesets: false`, `note`.
+   Profiles: `ci-only`, `container-pull`, `static-ftps`. `ring` is `canary` or `stable`; `canary` must match the repos in `renovate/default.json`. `visibility` (`public` or `private`) is read by `tools/fleet-drift.sh`. Optional: `extra_required_checks`, `rulesets: false`, `note`.
 4. Rulesets: `tools/fleet-rulesets.sh` (dry run), then `tools/fleet-rulesets.sh --apply`. Creates the `protect main` ruleset requiring `gate_check` (plus `extra_required_checks`) from the GitHub Actions app. Private repos on GitHub Free answer 403 and are reported, not protected.
 5. Verify: PR shows green `Security / security-gate`; first merge to `main` completes `build-container.yml`; `tools/fleet-status.sh` lists the repo and its pin.
 

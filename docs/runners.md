@@ -4,15 +4,15 @@
 |---|---|---|
 | `arc-ci` (default of input `runner`) | private repositories without their own scale set | ARC scale set on a self-hosted k3s node |
 | `arc-<repository>` | exactly one private repository each | one scale set and runner group per trust domain |
-| `ubuntu-24.04` (GitHub-hosted) | all public repositories; signing, SBOM upload, DAST, FTPS upload of private repositories | |
+| `ubuntu-24.04` (GitHub-hosted) | all public repositories; publish (scan, SBOM, push), signing, SBOM upload, DAST, FTPS upload of private repositories | |
 
 Node setup, ARC values, network policies and quotas live in the operator's private infrastructure repository; this
 page states only the contract the workflows rely on.
 
 ## Rules
 
-- Public repositories never run on self-hosted runners: runner groups use `visibility=selected` and
-  `allows_public_repositories=false`, and `ci.yml` routes by the API-reported visibility (fail closed).
+- Public repositories never run on self-hosted runners: the runner groups with runners use `visibility=selected` and
+  `allows_public_repositories=false` (the built-in Default group has no runners), and `ci.yml` routes by the API-reported visibility (fail closed).
 - Signing never runs on self-hosted runners.
 - No deploy runner for images: the runtime pulls signed images. `deploy-static.yml` defaults to
   `["self-hosted","deploy"]` and is for private repositories only; set `deploy-runner` for a GitHub-hosted FTPS upload.
@@ -29,7 +29,9 @@ page states only the contract the workflows rely on.
 - Pod image is `ci-toolbox` (digest-pinned, signed by `toolbox.yml`); no Docker daemon; rootless BuildKit (`bk`)
   builds an OCI tar.
 - Rootless BuildKit requires seccomp and AppArmor `Unconfined`, `procMount: Unmasked`, `allowPrivilegeEscalation: true`,
-  so the runner namespace cannot enforce Pod Security `baseline`/`restricted`; admission policies still forbid
+  so the runner namespace cannot enforce Pod Security `baseline`/`restricted`. The default scale set (`arc-ci`) has
+  since replaced `Unconfined` by a Localhost AppArmor profile and a custom seccomp profile (recorded in the operator's
+  private repository, not re-checked live); the other scale sets stay `Unconfined`; admission policies still forbid
   privileged mode, host namespaces and host paths.
 - Sub-IDs: a ConfigMap is mounted over `/etc/subuid` and `/etc/subgid`; the toolbox default is `runner:2000:63000`.
 - Runner user is uid 1001 (the `tb` wrapper on GitHub-hosted runners relies on the host `runner` uid).

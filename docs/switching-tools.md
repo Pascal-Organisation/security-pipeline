@@ -13,7 +13,7 @@ Callers depend only on the contract in the [README](../README.md#calling-the-wor
 | rootless BuildKit (`bk`) | private image builds | `toolbox/bk`, `toolbox/Dockerfile` |
 
 Replacing a scanner:
-1. Add the tool to `toolbox/Dockerfile` (digest-pinned), release the toolbox, bump `TOOLBOX` in `ci.yml` and `build-container.yml`.
+1. Add the tool to `toolbox/Dockerfile` (digest-pinned), release the toolbox, bump `TOOLBOX` in `ci.yml` and `build-container.yml` (by hand for now, see [release.md](release.md)).
 2. Add a trial job to `ci.yml`: reports only, always green, not in `needs` of `security-gate`, no `continue-on-error`.
 3. Compare findings, then add the job to `needs`, delete the old job, translate `.security/exceptions.json` in the same commit.
 
