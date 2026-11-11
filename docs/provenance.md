@@ -1,53 +1,52 @@
 # Provenance and vulnerability attestation
 
-## What changed
-- **Provenance is built in the `sign` job**, not in `build`. Inputs: the claims of the sign job's own GitHub OIDC
+## How it is built
+
+- **Provenance comes from the `sign` job**, not from `build`. Inputs: the claims of the sign job's own GitHub OIDC
   token (repository, ref, sha, event_name, run id / attempt, runner environment, repository and owner id,
-  `workflow_ref`, and `job_workflow_ref` = builder id, i.e. this reusable workflow at the caller's pinned SHA) and the
-  image digest from the `publish` job output (D-43). The claims are checked against the run context (`GITHUB_REPOSITORY`,
-  `GITHUB_SHA`, `GITHUB_REF`). The build job no longer writes `provenance.json` or `subject.txt`; the artifact
-  `attestations` carries only SBOM and Trivy JSON (evidence).
-- **Builder id** is now `https://github.com/<owner>/security-pipeline/.github/workflows/build-container.yml@<ref>` as
-  taken from the token (before: `@vX.Y.Z` from `PIPELINE_VERSION`). Callers pin by SHA, so it is a SHA now.
+  `workflow_ref`, and `job_workflow_ref` = builder id) and the image digest from the `publish` job (D-43). The
+  claims are checked against `GITHUB_REPOSITORY`, `GITHUB_SHA` and `GITHUB_REF`. The build job writes no
+  `provenance.json` or `subject.txt`; the artifact `attestations` holds only SBOM and Trivy JSON (evidence).
+- **Builder id** is `https://github.com/<owner>/security-pipeline/.github/workflows/build-container.yml@<ref>`, taken
+  from the token. Callers pin by SHA, so it is a SHA (earlier: `@vX.Y.Z` from `PIPELINE_VERSION`).
 - **Vulnerability attestation:** `cosign attest --type vuln` (predicate type
   `https://cosign.sigstore.dev/attestation/vuln/v1`) with `trivy image --format cosign-vuln` of the exact scanned OCI
   layout (vuln scanner only, no ignore file, unfixed included). It is evidence: the subject is the digest, the JSON
-  is not a trust input. Needs the DB already downloaded by the gate step (`--skip-db-update`).
-- **Deferred to v4.0.0:** an additional GitHub-generated provenance (`actions/attest-build-provenance`) for public repos.
-  It needs `attestations: write` in every caller's build job, which is a caller contract change (major release);
-  the v3.1.0 canary failed at startup without it (D-41).
+  is not a trust input. It needs the DB already downloaded by the gate step (`--skip-db-update`).
+- **Deferred to v4.0.0:** GitHub-generated provenance (`actions/attest-build-provenance`) for public repos. It needs
+  `attestations: write` in every caller's build job, a caller contract change (major release); the v3.1.0 canary
+  failed at startup without it (D-41).
 - Fields the cluster CUE policies check are unchanged: `predicateType`, `externalParameters.workflow.repository`
   (`https://github.com/<owner>/<repo>`) and `.ref` (`refs/heads/main`).
 
-## Honest SLSA level
-**Build L1 plus signature for the cosign provenance; L2 is not claimed.** The provenance is produced outside the
-job that runs the build and contains only platform-asserted values, which removes forgery of the predicate from the
-build job (which runs repo-defined Dockerfiles).
+## SLSA level
 
-Since D-43 the job that runs repo code (`build`) has a read-only token: it cannot push, tag or sign, and it reports no
-output. It only uploads the OCI tar as a workflow artifact. The `publish` job (GitHub-hosted, never self-hosted, no
-repo code, no checkout) treats that tar as hostile input: it accepts only plain OCI layout files, requires exactly one
-manifest, recomputes the manifest digest and every blob digest from the bytes, scans, pushes with the registry write
-permission and reports the digest that the registry returned and that equals the one it computed. The `sign` job attests
-that digest. So the digest is now computed by a job that runs no repo code, and a compromised build can no longer push
-an image of its own choosing under another digest, overwrite `latest`, or make the sign job attest a digest it did not
-hand over as bytes.
+**Build L1 plus signature; L2 is not claimed.** The provenance is produced outside the job that runs the build and
+contains only platform-asserted values, so the build job (which runs repo-defined Dockerfiles) cannot forge it.
 
-Still not L3 (and not claimed):
-- `build` and `publish` are jobs of the same caller-controlled workflow run. The artifact is not signed or attested by
-  the build, so `publish` cannot prove that the bytes came from the Dockerfile at that commit; it only proves what the
-  bytes are. A compromised build can still hand over a different (but scanned and gated) image, and that image gets
-  signed with this workflow's identity.
-- The signing identity is the reusable workflow's, shared by all jobs in it; there is no separate, non-falsifiable
-  builder identity per job and no isolated generator of the provenance's build parameters (they come from OIDC claims
-  of the run).
-- Private builds run on our own ephemeral runners; the node is the trust anchor (docs/runners.md), not an isolated
-  platform with attested hardening.
-- The builds are not reproducible (G-A7), so nobody can re-derive the image independently.
-The GitHub-generated attestation on public repos (planned, D-41) would add an L2-like origin for the signer identity,
-but it too would attest the digest handed in by the same workflow run. We do not claim L2/L3.
+Since D-43 the `build` job has a read-only token and only uploads the OCI tar as a workflow artifact. The `publish`
+job (GitHub-hosted, no repo code, no checkout) treats the tar as hostile: it accepts only plain OCI layout files,
+requires exactly one manifest, recomputes the manifest digest and every blob digest, scans, pushes, and reports the
+digest the registry returned (equal to the computed one). The `sign` job attests that digest. A compromised build
+therefore cannot push an image under another digest, overwrite `latest`, or make the sign job attest a digest it did
+not hand over as bytes.
 
-## Rollout note
-Extra attestations do not break admission (policies select by `predicateType`). On public repos two
-`slsa.dev/provenance/v1` attestations exist; both name the caller repo and `refs/heads/main`, so the CUE check
-passes either way. Verify with a canary image before relying on it (see PR).
+Not L3, not claimed:
+
+- `build` and `publish` belong to the same caller-controlled workflow run. The build does not sign or attest the
+  artifact, so `publish` proves what the bytes are, not that they came from the Dockerfile at that commit. A
+  compromised build can hand over a different (but scanned and gated) image, which is then signed with this
+  workflow's identity.
+- The signing identity is the reusable workflow's, shared by all its jobs; there is no per-job builder identity and no
+  isolated generator of the build parameters (they come from OIDC claims).
+- Private builds run on our own ephemeral runners; the node is the trust anchor ([runners.md](runners.md)).
+- Builds are not reproducible (G-A7), so nobody can re-derive the image independently.
+
+The planned GitHub-generated attestation for public repos (D-41) would add an L2-like origin for the signer identity,
+but would still attest the digest handed in by the same run. L2/L3 are not claimed.
+
+## Rollout
+
+Extra attestations do not break admission (policies select by `predicateType`). Public repos carry two
+`slsa.dev/provenance/v1` attestations; both name the caller repo and `refs/heads/main`, so the CUE check passes.
+Verify with a canary image before relying on it.

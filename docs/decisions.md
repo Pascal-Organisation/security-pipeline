@@ -8,9 +8,9 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-2 | Keyless signing in a separate GitHub-hosted job |
 | D-3 | One release workflow carries policy, gate, build and signature |
 | D-4 | Release only from a signed merge commit of a PR on `main` |
-| D-5 | Cluster trusts any commit SHA of `build-container.yml` (identity regex); provenance must name the caller repo + `refs/heads/main` (replaced the release-commit allowlist, 2026-11-05) |
+| D-5 | Cluster trusts any SHA of `build-container.yml` (identity regex); provenance must name the caller repo and `refs/heads/main`. Replaced the release-commit allowlist, 2026-11-05 |
 | D-6 | Signed SBOM and provenance, described honestly as SLSA L1 + signature |
-| D-9 | Provenance is generated in the sign job from OIDC claims + digest (not from a build-job file); vuln attestation (Trivy JSON) added; public repos also get GitHub build provenance. Still honestly L1 + signature, see docs/provenance.md |
+| D-9 | Provenance is generated in the sign job from OIDC claims + digest; vuln attestation (Trivy JSON) added; GitHub build provenance for public repos is deferred (D-41). Still L1 + signature, see [provenance.md](provenance.md) |
 | D-7 | Dependency-Track reports, it does not gate |
 | D-8 | Strip guessed CPEs from OS packages in the SBOM |
 | D-9 | The security gate runs once per release |
@@ -34,17 +34,15 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-30 | Static FTPS deploy: GitHub-hosted, checks itself, never deletes |
 | D-31 | DAST always on GitHub-hosted runners |
 | D-32 | Renovate with digest pins, rollout rings and limited automerge |
-| D-33 | Licence deny-list gate, `warn` in v3.1.0 and `fail` from the next release; exceptions need an `owner` |
+| D-33 | Licence deny-list gate, `warn` in v3.1.0; exceptions need an `owner`. Superseded by D-42 (default `fail`) |
 | D-34 | zizmor online audits on public repos only (read-only token); dependency-review on public PRs |
 | D-35 | Optional OpenVEX file `.security/vex.openvex.json` feeds Trivy; Trivy SARIF goes to code scanning for public repos only |
 | D-36 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d |
 | D-37 | Weekly drift check of org Actions settings, rulesets and code security against `fleet/repos.json`, read-only token, ntfy on drift |
-| D-38 | Public rulesets: signed commits, stale reviews dismissed, threads resolved, strict checks; 0 required approvals (single maintainer; CODEOWNERS documents ownership, review count would block the only maintainer) |
+| D-38 | Public rulesets: signed commits, stale reviews dismissed, threads resolved, strict checks; 0 required approvals, since a review count would block the only maintainer |
 | D-39 | Org Actions allowlist (`selected`, SHA pinning required, fork-PR approval for all external contributors on public repos) |
-| D-40 | Adopt [`target-architecture.md`](target-architecture.md) as the binding architectural goal (principles P1–P10, goal IDs, deploy contract, maturity L1–L3). Changes that move away from a goal need a decision naming the goal ID. |
-| D-41 | v3.1.0 is a minor release: `owner` on exceptions only warns in v3.x and becomes required in v4.0.0 (caller contract change per `release.md`); licence gate default stays `warn` until v3.2.0; `actions/attest-build-provenance` (needs caller `attestations: write`) moves to v4.0.0 |
-| D-42 | v3.2.0: licence gate default `fail` (deny-list AGPL-3.0*/GPL-3.0*/SSPL-1.0, exceptions with `kind: license`). Checked 2026-11-09: no caller had licence findings on v3.1.x |
-| D-43 | The job that runs repo code (Dockerfile build) holds no registry write permission: a separate GitHub-hosted `publish` job re-hashes the OCI tar, scans, pushes and reports the digest (G-A6 step, G-A3, P5); no caller-visible change |
-| D-44 | v3.3.0 is an unsigned lightweight tag on the verified merge commit `38ca59d` (the Release was created before the signed tag was pushed). Accepted for this version: the tag ruleset forbids replacing it, callers pin the commit SHA and consumers trust the workflow identity, not the tag. G-S3 stays Partial; `release.md` now requires `--verify-tag` and a tag-type check |
-
-Full decision rationale: git history of docs/decisions.md before this commit.
+| D-40 | [target-architecture.md](target-architecture.md) is the binding goal (P1-P10, goal IDs, deploy contract, maturity L1-L3). Moving away from a goal needs a decision naming its ID |
+| D-41 | v3.1.0 is a minor release: `owner` on exceptions warns in v3.x and is required in v4.0.0 (caller contract change, [release.md](release.md)); `actions/attest-build-provenance` (needs caller `attestations: write`) moves to v4.0.0 |
+| D-42 | v3.2.0: licence gate default `fail` (deny-list AGPL-3.0*/GPL-3.0*/SSPL-1.0, exceptions with `kind: license`); no caller had findings on v3.1.x (checked 2026-11-09) |
+| D-43 | The build job holds no registry write permission; a separate GitHub-hosted `publish` job re-hashes the OCI tar, scans, pushes and reports the digest (G-A6 step, G-A3, P5). No caller-visible change |
+| D-44 | v3.3.0 is an unsigned lightweight tag on the verified merge commit `38ca59d`: the Release was created before the signed tag was pushed. Accepted, because the tag ruleset forbids replacing it, callers pin the SHA and consumers trust the workflow identity, not the tag. G-S3 stays Partial; [release.md](release.md) requires `--verify-tag` and a tag-type check |
