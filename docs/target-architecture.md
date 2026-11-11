@@ -66,7 +66,7 @@ Status: **Done** (in a release or live), **Merged** (on `main`, ships with the n
 |---|---|---|---|
 | G-S1 | Default branch of every public repo protected by a ruleset: PR required, no force-push/deletion, required check `security-gate`, strict (up-to-date) checks, dismiss stale approvals, conversations resolved, signed commits | `gh api repos/<r>/rulesets/<id>`; `fleet-drift.yml` | Done (approvals = 0, single maintainer → §6) |
 | G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Done (all repos) |
-| G-S3 | Release tags `v*` are signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (immutable releases: owner setting) |
+| G-S3 | Release tags `v*` are signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (immutable releases: owner setting; v3.3.0 is an unsigned lightweight tag, D-44) |
 | G-S4 | Org allows only GitHub-owned actions, `Pascal-Organisation/*` and an explicit list; every `uses:` pinned to a full SHA (org-enforced) | `gh api orgs/<org>/actions/permissions` | Done |
 | G-S5 | Fork PRs from any external contributor need approval before CI runs | repo Actions settings | Done |
 | G-S6 | Secret scanning: push protection on public repos; TruffleHog on every push/PR and full history weekly on all repos | settings + `ci.yml` | Done |
