@@ -20,11 +20,16 @@ The template (`container-pull` profile) contains: `Dockerfile` (digest-pinned ba
 4. Rulesets: `tools/fleet-rulesets.sh` (dry run), then `tools/fleet-rulesets.sh --apply`. Creates the `protect main` ruleset requiring `gate_check` (plus `extra_required_checks`) from the GitHub Actions app. Private repos on GitHub Free answer 403 and are reported, not protected.
 5. Verify: PR shows green `Security / security-gate`; first merge to `main` completes `build-container.yml`; `tools/fleet-status.sh` lists the repo and its pin.
 
+## Every repository that builds an image (private and public)
+
+| Step | Where |
+|---|---|
+| Add the repo to *Packages, ci-toolbox, Package settings, Manage Actions access* with role **Read** (UI only, no API). Since v3.3.0 the `publish` job of `build-container.yml` runs on a GitHub-hosted runner for private repos too and pulls the private toolbox with the repo's own token; without access the pull fails with `manifest unknown` or `unauthorized` and nothing is pushed or signed | `https://github.com/orgs/Pascal-Organisation/packages/container/ci-toolbox/settings` |
+
 ## Public repositories, extra steps
 
 | Step | Where |
 |---|---|
-| Add the repo to *Packages, ci-toolbox, Package settings, Manage Actions access* with role **Read** (UI only; without it the toolbox pull fails with `unauthorized`) | `https://github.com/orgs/Pascal-Organisation/packages/container/ci-toolbox/settings` |
 | After the first release, make the GHCR package `<name>` public (otherwise the cluster gets `ImagePullBackOff`) | package settings |
 | Keep `SECURITY.md` | repo root |
 
