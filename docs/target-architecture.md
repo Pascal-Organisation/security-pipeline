@@ -1,15 +1,15 @@
 # Target architecture (architectural goal)
 
-Status: **binding goal**, adopted 2026-11-09 (decision D-40). Owner: @pascal05.
-Companion: the infrastructure goal lives in the operator's private infrastructure repository (goal IDs `H-*`).
+Status: **binding goal**, adopted 2026-11-09 (D-40). Owner: @pascal05.
+Companion: the infrastructure goal (goal IDs `H-*`) lives in the operator's private infrastructure repository.
 
-This document defines the state the Pascal-Organisation software supply chain is built towards. It is the yardstick
-for every change: a PR that moves away from a goal below needs a recorded decision (`docs/decisions.md`) that names
-the goal ID and the reason. Current state lives in the README and `docs/*.md`; the path from today to this goal is
-the private roadmap (task IDs like `2.2` are referenced below).
+This is the state the Pascal-Organisation software supply chain is built towards. A PR that moves away from a goal
+needs a decision in [decisions.md](decisions.md) naming the goal ID and the reason. Current state is in the
+[README](../README.md) and `docs/*.md`; the path from today to the goal is a private roadmap (its task IDs, such as
+`2.2`, appear below).
 
-Constraints that shape every goal: **zero cost** (GitHub Free organisation, free/open-source tooling, own hardware),
-**one maintainer**, **security as strict as these constraints allow**.
+Constraints behind every goal: **zero cost** (GitHub Free organisation, free/open-source tooling, own hardware),
+**one maintainer**, **security as strict as these allow**.
 
 ## 1. Principles
 
@@ -56,7 +56,7 @@ flowchart LR
 
 Status: **Done** (in a release or live), **Merged** (on `main`, ships with the next release), **Partial**,
 **Planned** (task in the hardening plan), **Accepted risk** (deliberately not done, see §6).
-"Verify" names the evidence that proves the goal, so it can be re-checked at any time.
+"Verify" names the evidence that lets anyone re-check the goal.
 
 ## 4. Goal states
 
@@ -188,8 +188,8 @@ A runtime may run an own image only if **all** of the following hold; otherwise 
 
 ## 9. Governance of this goal
 
-- **Change control:** a PR touching workflows, policies, `renovate/` or `fleet/` states which goal IDs it affects.
-  Moving away from a goal requires a decision entry `D-<n>` referencing the goal ID.
-- **Drift:** `fleet-drift.yml` (settings) weekly; drift checks in the infrastructure repository (live vs git) cover the runtime side.
-- **Re-audit:** quarterly, re-map the goal tables against live state (read-only), update statuses, record deltas.
-- **Updates to this document:** status changes in the same PR that delivers them; goal changes only with a decision.
+- **Change control:** a PR touching workflows, policies, `renovate/` or `fleet/` names the goal IDs it affects.
+  Moving away from a goal needs a decision `D-<n>` that references the goal ID.
+- **Drift:** `fleet-drift.yml` checks settings weekly; drift checks in the infrastructure repository (live vs git) cover the runtime.
+- **Re-audit:** quarterly, compare the goal tables with live state (read-only), update statuses, record deltas.
+- **Updating this document:** status changes go in the PR that delivers them; goal changes need a decision.

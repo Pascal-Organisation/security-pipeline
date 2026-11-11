@@ -1,6 +1,6 @@
 # Switching tools
 
-Callers depend only on the contract in the [README](../README.md#calling-the-workflows). Tools live in the `ci-toolbox` image (`toolbox/Dockerfile`, digest-pinned) and are called as `tb <tool>`.
+Callers depend only on the contract in the [README](../README.md#calling-the-workflows). Tools live in the digest-pinned `ci-toolbox` image (`toolbox/Dockerfile`) and are called as `tb <tool>`.
 
 | Tool | Role | How to replace |
 |---|---|---|

@@ -46,5 +46,3 @@ One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
 | D-42 | v3.2.0: licence gate default `fail` (deny-list AGPL-3.0*/GPL-3.0*/SSPL-1.0, exceptions with `kind: license`). Checked 2026-11-09: no caller had licence findings on v3.1.x |
 | D-43 | The job that runs repo code (Dockerfile build) holds no registry write permission: a separate GitHub-hosted `publish` job re-hashes the OCI tar, scans, pushes and reports the digest (G-A6 step, G-A3, P5); no caller-visible change |
 | D-44 | v3.3.0 is an unsigned lightweight tag on the verified merge commit `38ca59d` (the Release was created before the signed tag was pushed). Accepted for this version: the tag ruleset forbids replacing it, callers pin the commit SHA and consumers trust the workflow identity, not the tag. G-S3 stays Partial; `release.md` now requires `--verify-tag` and a tag-type check |
-
-Full decision rationale: git history of docs/decisions.md before this commit.

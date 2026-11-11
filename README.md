@@ -3,9 +3,9 @@
 Reusable GitHub Actions workflows (security gate, signed container release, DAST, static deploy) for the
 Pascal-Organisation repositories. Callers pin a release commit; tools and policy live only here.
 
-Architectural goal: [`docs/target-architecture.md`](docs/target-architecture.md) — principles, goal states, deploy contract, maturity levels.
-Current release: see [`VERSION`](VERSION). Fleet: [`fleet/repos.json`](fleet/repos.json), live state via
-`tools/fleet-status.sh`. Vulnerability reports: [SECURITY.md](SECURITY.md).
+Current release: [`VERSION`](VERSION). Fleet: [`fleet/repos.json`](fleet/repos.json), live state via
+`tools/fleet-status.sh`. Goal and principles: [`docs/target-architecture.md`](docs/target-architecture.md).
+Vulnerability reports: [SECURITY.md](SECURITY.md).
 
 ## Workflows
 
@@ -42,13 +42,13 @@ Trial jobs `Shell lint (trial)` and `Runtime images (trial)` report only and are
 
 1. **Release policy:** ref is `refs/heads/main`, commit is GitHub-verified (signed), commit is the merge result of a PR into `main`.
 2. **Gate:** `ci.yml`.
-3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted). This is the only job that runs repo code; it has a read-only token and hands the tar to the next job as a workflow artifact.
-3a. **Publish** (GitHub-hosted, no repo code): re-computes the manifest and blob digests of the tar itself, then steps 4 to 7.
+3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted). The only job that runs repo code; read-only token; hands the tar on as a workflow artifact.
+3a. **Publish** (GitHub-hosted, no repo code): re-computes the manifest and blob digests of the tar, then steps 4 to 7.
 4. **Trivy image** on the tar: fixable HIGH/CRITICAL and secrets block.
 5. **SBOM:** Syft CycloneDX from the tar; CPEs of `pkg:deb`/`pkg:apk` components are stripped.
 6. **Push** the scanned tar to `ghcr.io/pascal-organisation/<repo>` with crane; fails if the registry digest differs from the tar's manifest digest.
 7. **Vulnerability evidence:** Trivy JSON (cosign `vuln` format) of the scanned image, passed to the sign job as evidence.
-8. **Sign:** in a GitHub-hosted job that runs no repo code and no scanner: SLSA v1 provenance generated there from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations; GitHub artifact attestations for public repos are deferred to v4.0.0 (they need `attestations: write` from every caller; details: `docs/provenance.md`).
+8. **Sign** (GitHub-hosted, no repo code, no scanner): SLSA v1 provenance from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations. GitHub artifact attestations for public repos are deferred to v4.0.0 (they need `attestations: write` from every caller; see [docs/provenance.md](docs/provenance.md)).
 9. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
 
 Cluster admission (Sigstore policy-controller, `ClusterImagePolicy` per app) accepts an image only with the
@@ -60,10 +60,10 @@ Exceptions: `.security/exceptions.json` with `id`, `reason`, `owner` (required s
 After expiry the finding blocks again. The non-blocking job `Exceptions expiry (report)` lists expired entries
 and those expiring within 14 days as warnings and in the job summary.
 
-Added in v3.1.0 (`ci.yml`):
+Also in `ci.yml` (since v3.1.0):
 
 - **zizmor online audits** on public repos (GitHub-hosted, read-only `GITHUB_TOKEN`): impostor commits, known-vulnerable actions, ref confusion. The offline run stays everywhere.
-- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `fail` since v3.2.0) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing; **the default becomes `fail` in the next release**. Exceptions: `kind: "license"`, `id` = licence name or package name.
+- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `fail` since v3.2.0) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing. Exceptions: `kind: "license"`, `id` = licence name or package name.
 - **Dependency review** (`actions/dependency-review-action`, fail on high) on pull requests of public repos; part of `security-gate`.
 - **VEX:** an optional `.security/vex.openvex.json` is passed to Trivy `--vex` (repo scan and image scan).
 - **Trivy SARIF** (HIGH/CRITICAL) uploaded to code scanning on public repos (not for fork PRs; never blocks).
@@ -93,10 +93,10 @@ names above, the workflow path `build-container.yml` (it is the signing identity
 
 ## Versioning and pinning
 
-- Callers pin the full commit SHA with a `# vX.Y.Z` comment; Renovate bumps it via the shared preset.
+- Callers pin the full commit SHA with a `# vX.Y.Z` comment; Renovate bumps it.
 - Preset: `local>Pascal-Organisation/security-pipeline//renovate/default` (digest pins, weekly lock-file maintenance, automerge of aged minor/patch, majors and runtime-image minors by hand).
 - Rings: `canary` (`workingrepo`, `anmeldungunihandball`) takes a release at once; `stable` after `minimumReleaseAge` (3 days). Majors are manual.
-- Release steps: [docs/release.md](docs/release.md).
+- Releasing: [docs/release.md](docs/release.md).
 
 ## Runners
 
@@ -119,5 +119,5 @@ Signing, DAST and the FTPS upload always run GitHub-hosted. Details: [docs/runne
 | [docs/switching-tools.md](docs/switching-tools.md) | Replacing a tool, `bk` |
 | [docs/decisions.md](docs/decisions.md) | One line per design decision |
 
-Local checks: copy `templates/pre-commit-config.yaml` to `.pre-commit-config.yaml`; sign commits
+Local checks: copy `templates/pre-commit-config.yaml` to `.pre-commit-config.yaml` and sign commits
 (`gpg.format ssh`, `commit.gpgsign true`).

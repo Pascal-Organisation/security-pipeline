@@ -6,8 +6,8 @@
 | `arc-<repository>` | exactly one private repository each | one scale set and runner group per trust domain |
 | `ubuntu-24.04` (GitHub-hosted) | all public repositories; signing, SBOM upload, DAST, FTPS upload of private repositories | |
 
-The self-hosted runner infrastructure (node setup, ARC values, network policies, quotas) is maintained in the
-operator's private infrastructure repository; this page only states the contract the workflows rely on.
+Node setup, ARC values, network policies and quotas live in the operator's private infrastructure repository; this
+page states only the contract the workflows rely on.
 
 ## Rules
 
