@@ -28,7 +28,18 @@ Canonical here; the infrastructure goal inherits them.
 
 ## 2. Trust domains
 
-Flow: repo (GitHub-hosted runner for public, ephemeral self-hosted runner for private) builds an untrusted image tar; the GitHub-hosted publish job re-hashes, scans and pushes it; the GitHub-hosted sign job signs it keylessly (OIDC, Rekor); GHCR holds image, signature, SBOM, provenance and vulnerability attestation; the runtime's admission policy (fail-closed) accepts it and pulls updates.
+```mermaid
+flowchart LR
+  dev[Maintainer<br/>signed commits, MFA] --> gh[GitHub repos<br/>rulesets, CODEOWNERS]
+  gh -->|public repos| hosted[GitHub-hosted runners<br/>ephemeral]
+  gh -->|private repos| arc[Self-hosted CI cluster<br/>ephemeral runner per job,<br/>one scale set per trust domain]
+  hosted -->|image tar, untrusted| pub["Publish job (GitHub-hosted)<br/>re-hashes, scans, pushes"]
+  arc -->|image tar, untrusted| pub
+  pub --> sign["Sign job (GitHub-hosted)<br/>OIDC keyless, Rekor"]
+  sign --> reg[(GHCR<br/>image + signature +<br/>SBOM + provenance + vuln)]
+  reg --> adm{Admission<br/>policy-controller<br/>fail-closed}
+  adm --> run[Runtime cluster<br/>pull-based updates]
+```
 
 | Domain | Runs | May hold | Must never |
 |---|---|---|---|
