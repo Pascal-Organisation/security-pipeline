@@ -17,29 +17,29 @@ page states only the contract the workflows rely on.
 - No deploy runner for images: the runtime pulls signed images. `deploy-static.yml` defaults to
   `["self-hosted","deploy"]` and is for private repositories only; set `deploy-runner` for a GitHub-hosted FTPS upload.
 - A repository never runs on a scale set of another trust domain.
-- Label changes need `helm uninstall` + `install` (ARC reads labels at creation); do not change the pod template while
+- Label changes need `helm uninstall` + `install` (ARC reads labels at creation); never change the pod template while
   runners hold jobs.
 
 ## Job isolation (self-hosted)
 
 - One ephemeral pod per job, `hostUsers: false` (own user namespace), runc, not privileged, capabilities
   `SETUID`/`SETGID` only, no service-account token, `emptyDir` volumes deleted with the pod.
-- Network: default-deny; egress only DNS and public HTTP(S); no access to the cluster API, the node, the LAN or
-  link-local metadata (verified by a probe matrix).
-- Pod image is `ci-toolbox` (digest-pinned, signed by `toolbox.yml`); no Docker daemon. Images are built by rootless
-  BuildKit (`bk`) to an OCI tar.
+- Network: default-deny; egress only DNS and public HTTP(S); no cluster API, node, LAN or link-local metadata
+  (probe matrix).
+- Pod image is `ci-toolbox` (digest-pinned, signed by `toolbox.yml`); no Docker daemon; rootless BuildKit (`bk`)
+  builds an OCI tar.
 - Rootless BuildKit requires seccomp and AppArmor `Unconfined`, `procMount: Unmasked`, `allowPrivilegeEscalation: true`,
-  so the runner namespace cannot enforce Pod Security `baseline`/`restricted` (documented exception; admission
-  policies still forbid privileged mode, host namespaces and host paths).
+  so the runner namespace cannot enforce Pod Security `baseline`/`restricted`; admission policies still forbid
+  privileged mode, host namespaces and host paths.
 - Sub-IDs: a ConfigMap is mounted over `/etc/subuid` and `/etc/subgid`; the toolbox default is `runner:2000:63000`.
 - Runner user is uid 1001 (the `tb` wrapper on GitHub-hosted runners relies on the host `runner` uid).
 - GitHub access: private GitHub App with one permission (Organization, Self-hosted runners: read and write); the key
   exists only as a Kubernetes Secret on the node; pods get a just-in-time registration.
-- Public repositories build with buildx on GitHub-hosted runners because Ubuntu 24.04 sets
-  `kernel.apparmor_restrict_unprivileged_userns=1`.
+- Public repositories build with buildx on GitHub-hosted runners (Ubuntu 24.04 sets
+  `kernel.apparmor_restrict_unprivileged_userns=1`).
 - `ci-toolbox` stays private: self-hosted pods use a read-only pull secret (`read:packages`); GitHub-hosted jobs log in
   with `GITHUB_TOKEN` (`packages: read`) and the repository must be listed under the package's Manage Actions access.
-- Known limit: weaker than a microVM per job; the node is the trust anchor for private builds.
+- Limit: weaker than a microVM per job; the node is the trust anchor for private builds.
 
 ## Versions
 

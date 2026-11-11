@@ -36,37 +36,33 @@ Vulnerability reports: [SECURITY.md](SECURITY.md).
 | Dependencies and IaC | Trivy fs | fixable HIGH/CRITICAL (vuln, misconfig) | all |
 | Dockerfile lint | hadolint | error | all, with `dockerfile` |
 
-Trial jobs `Shell lint (trial)` and `Runtime images (trial)` report only and are not part of the gate.
+Trial jobs `Shell lint (trial)` and `Runtime images (trial)` only report.
 
 `build-container.yml`, in order:
 
-1. **Release policy:** ref is `refs/heads/main`, commit is GitHub-verified (signed), commit is the merge result of a PR into `main`.
+1. **Release policy:** ref is `refs/heads/main`; commit is GitHub-verified and the merge result of a PR into `main`.
 2. **Gate:** `ci.yml`.
-3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted). The only job that runs repo code; read-only token; hands the tar on as a workflow artifact.
-3a. **Publish** (GitHub-hosted, no repo code): re-computes the manifest and blob digests of the tar, then steps 4 to 7.
-4. **Trivy image** on the tar: fixable HIGH/CRITICAL and secrets block.
-5. **SBOM:** Syft CycloneDX from the tar; CPEs of `pkg:deb`/`pkg:apk` components are stripped.
-6. **Push** the scanned tar to `ghcr.io/pascal-organisation/<repo>` with crane; fails if the registry digest differs from the tar's manifest digest.
-7. **Vulnerability evidence:** Trivy JSON (cosign `vuln` format) of the scanned image, passed to the sign job as evidence.
-8. **Sign** (GitHub-hosted, no repo code, no scanner): SLSA v1 provenance from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations. GitHub artifact attestations for public repos are deferred to v4.0.0 (they need `attestations: write` from every caller; see [docs/provenance.md](docs/provenance.md)).
-9. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
+3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted). The only job that runs repo code; read-only token.
+4. **Publish** (GitHub-hosted, no repo code): re-computes the tar's digests, then scans it with Trivy (fixable HIGH/CRITICAL and secrets block), creates the Syft CycloneDX SBOM (CPEs of `pkg:deb`/`pkg:apk` stripped), pushes it with crane to `ghcr.io/pascal-organisation/<repo>` (fails if the registry digest differs from the tar's) and produces Trivy JSON as vulnerability evidence.
+5. **Sign** (GitHub-hosted, no repo code, no scanner): SLSA v1 provenance from OIDC claims + digest, keyless Cosign signature, SBOM, provenance and vulnerability attestations. GitHub artifact attestations for public repos wait for v4.0.0 ([docs/provenance.md](docs/provenance.md)).
+6. **Dependency-Track:** SBOM upload, reporting only; skipped without the `DTRACK_*` secrets.
 
 Cluster admission (Sigstore policy-controller, `ClusterImagePolicy` per app) accepts an image only with the
 signature identity `build-container.yml` of this repo, a CycloneDX attestation and a provenance naming the
-repository and `refs/heads/main`.
+repository and `refs/heads/main` (full contract: [target-architecture.md](docs/target-architecture.md)).
 
-Exceptions: `.security/exceptions.json` with `id`, `reason`, `owner` (required since v3.1.0: who revisits it),
+Exceptions: `.security/exceptions.json` with `id`, `reason`, `owner` (who revisits it; warns in v3.x, required in v4.0.0),
 `expires` (YYYY-MM-DD), optional `kind` (`vulnerability` default, `misconfiguration`, `secret`, `license`).
-After expiry the finding blocks again. The non-blocking job `Exceptions expiry (report)` lists expired entries
-and those expiring within 14 days as warnings and in the job summary.
+After expiry the finding blocks again. The non-blocking job `Exceptions expiry (report)` warns about expired entries
+and those expiring within 14 days.
 
-Also in `ci.yml` (since v3.1.0):
+Further `ci.yml` checks:
 
-- **zizmor online audits** on public repos (GitHub-hosted, read-only `GITHUB_TOKEN`): impostor commits, known-vulnerable actions, ref confusion. The offline run stays everywhere.
-- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `fail` since v3.2.0) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). `warn` lists violations without failing. Exceptions: `kind: "license"`, `id` = licence name or package name.
-- **Dependency review** (`actions/dependency-review-action`, fail on high) on pull requests of public repos; part of `security-gate`.
-- **VEX:** an optional `.security/vex.openvex.json` is passed to Trivy `--vex` (repo scan and image scan).
-- **Trivy SARIF** (HIGH/CRITICAL) uploaded to code scanning on public repos (not for fork PRs; never blocks).
+- **zizmor online audits** on public repos (read-only `GITHUB_TOKEN`): impostor commits, known-vulnerable actions, ref confusion.
+- **Licence gate:** inputs `license-gate` (`off` | `warn` | `fail`, default `fail`) and `license-deny` (default `AGPL-3.0*,GPL-3.0*,SSPL-1.0`). Exceptions: `kind: "license"`, `id` = licence or package name.
+- **Dependency review** (`actions/dependency-review-action`, fail on high) on public-repo PRs; part of `security-gate`.
+- **VEX:** an optional `.security/vex.openvex.json` is passed to Trivy `--vex`.
+- **Trivy SARIF** (HIGH/CRITICAL) goes to code scanning on public repos (not fork PRs; never blocks).
 
 ## Calling the workflows
 
@@ -94,8 +90,8 @@ names above, the workflow path `build-container.yml` (it is the signing identity
 ## Versioning and pinning
 
 - Callers pin the full commit SHA with a `# vX.Y.Z` comment; Renovate bumps it.
-- Preset: `local>Pascal-Organisation/security-pipeline//renovate/default` (digest pins, weekly lock-file maintenance, automerge of aged minor/patch, majors and runtime-image minors by hand).
-- Rings: `canary` (`workingrepo`, `anmeldungunihandball`) takes a release at once; `stable` after `minimumReleaseAge` (3 days). Majors are manual.
+- Preset: `local>Pascal-Organisation/security-pipeline//renovate/default` (digest pins, weekly lock-file maintenance, automerge of aged minor/patch; majors and runtime-image minors by hand).
+- Rings: `canary` (`workingrepo`, `anmeldungunihandball`) takes a release at once; `stable` after `minimumReleaseAge` (3 days).
 - Releasing: [docs/release.md](docs/release.md).
 
 ## Runners
@@ -105,19 +101,19 @@ names above, the workflow path `build-container.yml` (it is the signing identity
 | Public | GitHub-hosted only; visibility is read from the API, never from an input |
 | Private | Self-hosted ARC scale sets (input `runner`, default `arc-ci`), one fresh pod per job |
 
-Signing, DAST and the FTPS upload always run GitHub-hosted. Details: [docs/runners.md](docs/runners.md).
+Signing, DAST and the FTPS upload always run GitHub-hosted. See [docs/runners.md](docs/runners.md).
 
 ## Other docs
 
 | Doc | Content |
 |---|---|
-| [docs/target-architecture.md](docs/target-architecture.md) | Architectural goal: principles, goal IDs with status, deploy contract, maturity levels |
-| [docs/provenance.md](docs/provenance.md) | What the provenance and attestations contain, and the honest SLSA level |
-| [docs/new-project.md](docs/new-project.md) | Create and register a new repository |
-| [docs/release.md](docs/release.md) | Releasing the pipeline |
-| [docs/runners.md](docs/runners.md) | Runner groups and isolation rules |
-| [docs/switching-tools.md](docs/switching-tools.md) | Replacing a tool, `bk` |
-| [docs/decisions.md](docs/decisions.md) | One line per design decision |
+| [target-architecture.md](docs/target-architecture.md) | Principles, goal IDs with status, deploy contract, maturity levels |
+| [provenance.md](docs/provenance.md) | Provenance and attestations; the SLSA level |
+| [new-project.md](docs/new-project.md) | Create and register a repository |
+| [release.md](docs/release.md) | Release the pipeline |
+| [runners.md](docs/runners.md) | Runner groups and isolation |
+| [switching-tools.md](docs/switching-tools.md) | Replace a tool; `bk` |
+| [decisions.md](docs/decisions.md) | One line per decision |
 
 Local checks: copy `templates/pre-commit-config.yaml` to `.pre-commit-config.yaml` and sign commits
 (`gpg.format ssh`, `commit.gpgsign true`).
