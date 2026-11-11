@@ -35,8 +35,9 @@ flowchart LR
   dev[Maintainer<br/>signed commits, MFA] --> gh[GitHub repos<br/>rulesets, CODEOWNERS]
   gh -->|public repos| hosted[GitHub-hosted runners<br/>ephemeral]
   gh -->|private repos| arc[Self-hosted CI cluster<br/>ephemeral runner per job,<br/>one scale set per trust domain]
-  hosted --> sign["Sign job (GitHub-hosted)<br/>OIDC keyless, Rekor"]
-  arc --> sign
+  hosted -->|image tar, untrusted| pub["Publish job (GitHub-hosted)<br/>re-hashes, scans, pushes"]
+  arc -->|image tar, untrusted| pub
+  pub --> sign["Sign job (GitHub-hosted)<br/>OIDC keyless, Rekor"]
   sign --> reg[(GHCR<br/>image + signature +<br/>SBOM + provenance + vuln)]
   reg --> adm{Admission<br/>policy-controller<br/>fail-closed}
   adm --> run[Runtime cluster<br/>pull-based updates]
@@ -46,6 +47,7 @@ flowchart LR
 |---|---|---|---|
 | Public CI | Public repos on GitHub-hosted runners | `GITHUB_TOKEN` (read), OIDC for signing | Run on own hardware; access private packages beyond read |
 | Private CI | Private repos on ephemeral self-hosted runners, one scale set per trust domain | Read token for the private toolbox image | Reach the LAN, the cluster API or another domain's cache |
+| Publish | Separate GitHub-hosted job (D-43) | Registry write token (`GITHUB_TOKEN`, `packages: write`) | Execute repository code or Dockerfiles; run on own hardware; trust a digest or tag reported by the build job |
 | Signing | Separate GitHub-hosted job | OIDC token for Fulcio | Execute repository code or Dockerfiles |
 | Registry | GHCR | Images and referrers (signature, attestations) | Be trusted by itself (P3) |
 | Runtime | Consumers (app cluster) | Pull credentials (read-only) | Accept anything that fails the deploy contract (§4.5) |

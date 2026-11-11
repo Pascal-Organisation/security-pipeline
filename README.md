@@ -12,7 +12,7 @@ Current release: see [`VERSION`](VERSION). Fleet: [`fleet/repos.json`](fleet/rep
 | File | Purpose | Trigger | Key inputs | Secrets |
 |---|---|---|---|---|
 | `ci.yml` | Security gate; one required check `Security / security-gate` | `workflow_call` | `runner`, `sast-languages`, `python-paths`, `dockerfile`, `scan-skip-dirs` | none |
-| `build-container.yml` | Release policy, gate, build, scan, SBOM, push, sign | `workflow_call` (push to `main`) | `runner`, `context`, `dockerfile`, `target`, `submodules` + the `ci.yml` inputs; outputs `image`, `digest` | optional `DTRACK_API_KEY`, `DTRACK_ACCESS_CLIENT_ID`, `DTRACK_ACCESS_CLIENT_SECRET` |
+| `build-container.yml` | Release policy, gate, build (untrusted), scan, SBOM, push (trusted), sign | `workflow_call` (push to `main`) | `runner`, `context`, `dockerfile`, `target`, `submodules` + the `ci.yml` inputs; outputs `image`, `digest` | optional `DTRACK_API_KEY`, `DTRACK_ACCESS_CLIENT_ID`, `DTRACK_ACCESS_CLIENT_SECRET` |
 | `deploy-static.yml` | Ship a `.tgz` artifact over `ssh` or `ftps`; never deletes; private repos only | `workflow_call` | `transport` (required), `artifact-file`, `required-file`, `ftps-remote-dir`, `environment`, `url`, `deploy-runner` (default `["self-hosted","deploy"]`) | `ftp-host`, `ftp-user`, `ftp-pass` (ftps); `deploy-ssh-key`, `deploy-known-hosts` (ssh); `ntfy-url` |
 | `dast.yml` | ZAP baseline + Nuclei against a public URL; GitHub-hosted | `workflow_call` | `url` (required), `zap-minutes` (default 2) | none |
 | `toolbox.yml` | Build, scan, sign the `ci-toolbox` image | PR/push on `toolbox/**` | none | none |
@@ -42,7 +42,8 @@ Trial jobs `Shell lint (trial)` and `Runtime images (trial)` report only and are
 
 1. **Release policy:** ref is `refs/heads/main`, commit is GitHub-verified (signed), commit is the merge result of a PR into `main`.
 2. **Gate:** `ci.yml`.
-3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted).
+3. **Build** to an OCI tar (private: rootless BuildKit in the CI cluster; public: buildx on GitHub-hosted). This is the only job that runs repo code; it has a read-only token and hands the tar to the next job as a workflow artifact.
+3a. **Publish** (GitHub-hosted, no repo code): re-computes the manifest and blob digests of the tar itself, then steps 4 to 7.
 4. **Trivy image** on the tar: fixable HIGH/CRITICAL and secrets block.
 5. **SBOM:** Syft CycloneDX from the tar; CPEs of `pkg:deb`/`pkg:apk` components are stripped.
 6. **Push** the scanned tar to `ghcr.io/pascal-organisation/<repo>` with crane; fails if the registry digest differs from the tar's manifest digest.
