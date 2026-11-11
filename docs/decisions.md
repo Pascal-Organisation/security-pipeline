@@ -1,6 +1,6 @@
 # Decisions
 
-One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed).
+One line per active decision. Retired: D-13, D-14, D-29 (superseded or removed). The number D-9 was given twice (provenance in the sign job; the gate runs once per release); both lines stay valid and no other document cites D-9.
 
 | ID | Decision |
 |---|---|

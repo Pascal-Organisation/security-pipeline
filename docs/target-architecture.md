@@ -62,24 +62,24 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | ID | Goal | Verify | Status |
 |---|---|---|---|
 | G-S1 | Public repos: default branch protected by a ruleset (PR, no force-push/deletion, check `security-gate`, strict checks, stale approvals dismissed, conversations resolved, signed commits) | `gh api repos/<r>/rulesets/<id>`; `fleet-drift.yml` | Done (approvals = 0, section 6) |
-| G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Done |
-| G-S3 | Release tags `v*` signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (immutable releases: owner setting; v3.3.0 is an unsigned lightweight tag, D-44) |
+| G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Partial (present in 5 of 10 repos checked 2026-11-11; missing in 5 callers; informational only, no ruleset requires code-owner review) |
+| G-S3 | Release tags `v*` signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (tag ruleset incl. required signatures is live; immutable releases are off (owner setting); v3.3.0 is an unsigned lightweight tag, D-44) |
 | G-S4 | Org allows only GitHub-owned actions, `Pascal-Organisation/*` and an explicit list; every `uses:` pinned to a full SHA | `gh api orgs/<org>/actions/permissions` | Done |
 | G-S5 | Fork PRs from external contributors need approval before CI | repo Actions settings | Done |
 | G-S6 | Push protection on public repos; TruffleHog on every push/PR, full history weekly | settings, `ci.yml` | Done |
 | G-S7 | `SECURITY.md` and private vulnerability reporting | repo settings | Done |
-| G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (live; needs `FLEET_DRIFT_TOKEN`) |
-| G-S9 | Organisation requires 2FA | org settings | Done |
+| G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (workflow and script exist; it has never run: the secret `FLEET_DRIFT_TOKEN` is not set and the first schedule is 2026-11-16; run locally on 2026-11-11 the script reports 6 differences, see G-C5) |
+| G-S9 | Organisation requires 2FA | org settings | Partial (the sole member has 2FA; the organisation requirement setting reads disabled on 2026-11-11) |
 
 ### 4.2 CI execution
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
 | G-C1 | Public repos build only on GitHub-hosted runners; `ci.yml` refuses self-hosted for them | `ci.yml` visibility gate; runner groups | Done |
-| G-C2 | Private repos build on ephemeral single-job runners; one scale set and namespace per trust domain | ARC config, runner group repo lists | Partial (one shared namespace, task 3.2) |
-| G-C3 | Runner pods: no Docker daemon, privileged mode or host mounts; user namespaces; rootless builds | runner pod spec | Done (seccomp/AppArmor unconfined for rootless BuildKit, section 6, task 3.6) |
+| G-C2 | Private repos build on ephemeral single-job runners; one scale set and namespace per trust domain | ARC config, runner group repo lists | Done (namespace and scale set per trust domain, 2026-11-09) |
+| G-C3 | Runner pods: no Docker daemon, privileged mode or host mounts; user namespaces; rootless builds | runner pod spec | Done (rootless BuildKit: the default scale set uses Localhost AppArmor and seccomp profiles, the others stay unconfined, section 6) |
 | G-C4 | Runner network default-deny; egress only DNS + public 443/80 | NetworkPolicy, probe matrix | Done (probe matrix OK 2026-11-09) |
-| G-C5 | Every workflow starts with `permissions: {}`; org token read-only; Actions cannot approve PRs | zizmor, org settings | Done |
+| G-C5 | Every workflow starts with `permissions: {}`; org token read-only; Actions cannot approve PRs | zizmor, org settings | Partial (workflows: Done; org settings: on 2026-11-11 the default workflow token is `write` and Actions may approve PRs, against the declared `read` / `false` in `fleet/repos.json`; every workflow still declares `permissions: {}`) |
 | G-C6 | No `pull_request_target`/`workflow_run` with untrusted checkout; `persist-credentials: false`; `timeout-minutes` everywhere; no expression injection | zizmor | Done |
 | G-C7 | No caches shared across runs or trust domains; fresh BuildKit state per build | workflow review | Done |
 
@@ -91,7 +91,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-B2 | Fixable HIGH/CRITICAL blocks, unfixable reported; licence deny-list (AGPL/GPL-3/SSPL) blocks | job summaries | Done (v3.2.0, D-42) |
 | G-B3 | Public PRs: dependency review blocks new high-severity dependencies | `ci.yml` | Done (v3.1.0) |
 | G-B4 | Lockfiles with hashes, base images by digest (Renovate), OS updates at build | Dockerfiles, Renovate | Partial (per repo) |
-| G-B5 | Renovate: 7-day cooldown, 0 days for security fixes, grouped digest bumps for image + policy, registry prefix kept | `renovate/default.json` | Done (#41) |
+| G-B5 | Renovate: 7-day cooldown, 0 days for security fixes, automerge only after the age and checks | `renovate/default.json` | Done (the grouping of image and policy bumps lives in the consumer's own Renovate config; the preset has no rule for own images, which it disables) |
 
 ### 4.4 Artifacts and evidence
 
@@ -123,7 +123,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 | G-D1 | Items 1-3, 5, 6 enforced at admission, fail-closed, no match = deny | ClusterImagePolicies | Done |
 | G-D2 | Item 2 (builder.id, event) and item 4 enforced | ClusterImagePolicies | Done (app cluster, 2026-11-09) |
 | G-D3 | Pull-based deploys; CI never holds runtime credentials | updater design | Done |
-| G-D4 | Runtime manifests reconciled from git (GitOps) | n/a | Planned (stretch) |
+| G-D4 | Runtime manifests reconciled from git (GitOps) | live state vs git | Partial (a GitOps controller reconciles every app-cluster unit from `main` since 2026-11-11; commits are not signature-verified and pruning is off, so the stretch goal of signed GitOps is open) |
 
 ### 4.6 Vulnerability and exception management
 
@@ -132,7 +132,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 | G-V1 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d | [decisions.md](decisions.md) (D-36) | Done |
 | G-V2 | Exceptions only in `.security/exceptions.json` (`id`, `kind`, `reason`, `owner`, `expires`); expired ones reported | `ci.yml` | Done (v3.1.0; owner warns, required in v4.0.0) |
 | G-V3 | Not-affected findings as OpenVEX, applied to all scans | `.security/vex.openvex.json` | Done (v3.1.0) |
-| G-V4 | Running images re-scanned weekly | in-cluster job | Planned (task 6.3) |
+| G-V4 | Running images re-scanned weekly | in-cluster job | Done (weekly CronJob in the app cluster since 2026-11-09; first scheduled run 2026-11-15) |
 
 ### 4.7 Release and operations
 
@@ -156,7 +156,7 @@ ship (use a time-limited, owned exception).
 |---|---|---|---|
 | 0 required approvals | Single maintainer; no self-approval | Rulesets, signed commits, CODEOWNERS, release policy | Second maintainer or review bot |
 | Private repos without CodeQL, GitHub secret scanning, artifact attestations | Paid features | Semgrep, Bandit, TruffleHog, cosign attestations | If plans change |
-| Rootless BuildKit needs unconfined seccomp/AppArmor | No free sandbox works on the CI hardware (nested Kata failed) | Ephemeral pod, user namespaces, no privileges, network policy, separate cluster | Task 3.6 |
+| Rootless BuildKit needs relaxed seccomp/AppArmor (default scale set: custom Localhost profiles; other scale sets: unconfined) | No free sandbox works on the CI hardware (nested Kata failed) | Ephemeral pod, user namespaces, no privileges, network policy, separate cluster | When the other scale sets get the custom profiles |
 | SLSA L1+ (not L2/L3) for private repos | Platform provenance needs Enterprise | Provenance from OIDC claims in a separate sign job | L3 milestone |
 | Dependency-Track reporting only | Build gate is Trivy | SLAs, weekly re-scan | n/a |
 
@@ -167,20 +167,20 @@ Status as of v3.3.0 (see `VERSION`, [decisions.md](decisions.md), tags v3.0.2 to
 | Level | Meaning | Status |
 |---|---|---|
 | **L1 Baseline** | Signed images, SBOM, fail-closed admission, pinned actions, gates | Reached (v3.0.x, 2026-11-04) |
-| **L2 Hardened** | Provenance from the sign job, vulnerability attestation enforced at admission, allowlist + SHA enforcement, CODEOWNERS everywhere, drift check live, runner network isolation, namespace per trust domain | Nearly reached: all met (G-A3, G-A4, G-D2, G-S4, G-S2, G-C4) except namespace per trust domain (G-C2, Partial) and a working drift check (G-S8, Partial) |
-| **L3 Verified** | Isolated provenance generator (SLSA Build L3), GitOps with signed commits, reproducible builds, weekly runtime re-scan, failing licence gate | Licence gate failing: done (v3.2.0, D-42). Open: G-A6, G-D4, G-A7, G-V4 |
+| **L2 Hardened** | Provenance from the sign job, vulnerability attestation enforced at admission, allowlist + SHA enforcement, CODEOWNERS everywhere, drift check live, runner network isolation, namespace per trust domain | Not yet reached. Met: G-A3, G-A4, G-D2, G-S4, G-C4, G-C2. Open: CODEOWNERS everywhere (G-S2), a working drift check (G-S8), org 2FA requirement (G-S9) and the org token defaults (G-C5) |
+| **L3 Verified** | Isolated provenance generator (SLSA Build L3), GitOps with signed commits, reproducible builds, weekly runtime re-scan, failing licence gate | Licence gate failing: done (v3.2.0, D-42). Done: weekly runtime re-scan (G-V4). Open: G-A6, G-A7 and signed GitOps (G-D4 is Partial) |
 
 ## 8. KPIs
 
-| KPI | Target |
-|---|---|
-| Own images running that pass the full deploy contract | 100 % |
-| Actions/images referenced by mutable tag | 0 |
-| Open fixable Critical/High past SLA | 0 |
-| Expired exceptions | 0 |
-| `fleet-drift.yml` | green every week |
-| OpenSSF Scorecard (this repo) | >= 8.0 |
-| Security fix available to released image | within SLA; Renovate security PRs merged within 48 h |
+| KPI | Target | Measured 2026-11-11 |
+|---|---|---|
+| Own images running that pass the full deploy contract | 100 % | Not measured here (admission enforces it for the three image policies) |
+| Actions/images referenced by mutable tag | 0 | 0 `uses:` in this repo's workflows without a full SHA |
+| Open fixable Critical/High past SLA | 0 | Not measured |
+| Expired exceptions | 0 | Not measured |
+| `fleet-drift.yml` | green every week | Never run (secret missing) |
+| OpenSSF Scorecard (this repo) | >= 8.0 | 6.4 |
+| Security fix available to released image | within SLA; Renovate security PRs merged within 48 h | Not measured |
 
 ## 9. Governance
 
