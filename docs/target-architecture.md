@@ -67,7 +67,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-S3 | Release tags `v*` signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (tag ruleset incl. required signatures is live; immutable releases are off (owner setting); v3.3.0 is an unsigned lightweight tag, D-44) |
 | G-S4 | Org allows only GitHub-owned actions, `Pascal-Organisation/*` and an explicit list; every `uses:` pinned to a full SHA | `gh api orgs/<org>/actions/permissions` | Done |
 | G-S5 | Fork PRs from external contributors need approval before CI | repo Actions settings | Done |
-| G-S6 | Push protection on public repos; TruffleHog on every push/PR, full history weekly | settings, `ci.yml` | Done |
+| G-S6 | Push protection on public repos; TruffleHog on every push/PR, full history weekly; a finding that cannot leave history is accepted only through a `secret-scan` exception (exact detector, file and commit, owner, at most 90 days, never verified, D-48) | settings, `ci.yml` | Done (exceptions: with the release after D-48) |
 | G-S7 | `SECURITY.md` and private vulnerability reporting | repo settings | Done |
 | G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (workflow and script exist; it has never run: the secret `FLEET_DRIFT_TOKEN` is not set and the first schedule is 2026-11-16; run locally on 2026-11-11 the script reports 6 differences, see G-C5) |
 | G-S9 | Organisation requires 2FA | org settings | Partial (the sole member has 2FA; the organisation requirement setting reads disabled on 2026-11-11) |

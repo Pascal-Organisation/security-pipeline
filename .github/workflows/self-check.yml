@@ -40,6 +40,18 @@ jobs:
           persist-credentials: false
       - run: shellcheck --severity=warning tools/*.sh
 
+  secret-scan-exceptions:
+    name: Secret-scan exception tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/test-secret-scan-exceptions.sh
+
   consistency:
     name: Version & manifest consistency
     runs-on: ubuntu-24.04

@@ -53,7 +53,12 @@ repository and `refs/heads/main` (full contract: [target-architecture.md](docs/t
 
 Exceptions: `.security/exceptions.json` with `id`, `reason`, `owner` (who revisits it; warns in v3.x, required in v4.0.0),
 `expires` (YYYY-MM-DD), optional `kind` (`vulnerability` default, `misconfiguration`, `secret`, `license`).
-After expiry the finding blocks again. The non-blocking job `Exceptions expiry (report)` warns about expired entries
+After expiry the finding blocks again.
+`kind: "secret-scan"` accepts one TruffleHog finding that cannot leave the history (for example a connection string
+without credentials in an old commit): extra fields `detector`, `path` (exact file, no wildcards), `commit` (40 hex) and
+optional `line`; `owner` is required and `expires` is at most 90 days ahead. It matches exactly, never a verified
+finding, never a glob, and it is applied to the PR, push and full-history scans alike (D-48). Example:
+`{"id": "trufflehog-jdbc-1", "kind": "secret-scan", "detector": "JDBC", "path": "deploy/app.yaml", "commit": "<40 hex>", "reason": "...", "owner": "...", "expires": "YYYY-MM-DD"}`. The non-blocking job `Exceptions expiry (report)` warns about expired entries
 and those expiring within 14 days.
 
 Further `ci.yml` checks:

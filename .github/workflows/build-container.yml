@@ -368,10 +368,10 @@ jobs:
             jq -e 'all(.exceptions[];
                 (.id | test("^[A-Za-z0-9._:/-]+$")) and (.reason | length > 0)
                 and (.expires | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
-                and ((.kind // "vulnerability") | IN("vulnerability", "misconfiguration", "secret", "license")))' \
+                and ((.kind // "vulnerability") | IN("vulnerability", "misconfiguration", "secret", "license", "secret-scan")))' \
               "$SEC/exceptions.json" > /dev/null \
               || { echo "::error::.security/exceptions.json: every entry needs id, reason, expires (YYYY-MM-DD) and a known kind"; exit 1; }
-            jq -r '.exceptions | group_by(.kind // "vulnerability")[] |
+            jq -r '[.exceptions[] | select((.kind // "") != "secret-scan")] | group_by(.kind // "vulnerability")[] |
                 (((.[0].kind // "vulnerability") | if . == "vulnerability" then "vulnerabilities" else . + "s" end) + ":"),
                 (.[] | "  - id: \(.id)\n    statement: \(.reason | tojson)\n    expired_at: \(.expires)")' \
               "$SEC/exceptions.json" > "$RUNNER_TEMP/scanner-ignore.yaml"
