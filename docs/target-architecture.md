@@ -94,7 +94,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-B2 | Fixable HIGH/CRITICAL blocks, unfixable reported; licence deny-list (AGPL/GPL-3/SSPL) blocks | job summaries | Done (v3.2.0, D-42) |
 | G-B3 | Public PRs: dependency review blocks new high-severity dependencies | `ci.yml` | Done (v3.1.0) |
 | G-B4 | Lockfiles with hashes, base images by digest (Renovate), OS updates at build | Dockerfiles, Renovate | Partial (per repo) |
-| G-B5 | Renovate: patch, digest and pin updates and security alerts without a wait, minor and major updates (new functions) after 7 days (D-46); automerge only after the checks are green | `renovate/default.json` | Done (the grouping of image and policy bumps lives in the consumer's own Renovate config; the preset has no rule for own images, which it disables) |
+| G-B5 | Renovate: patch, digest and pin updates and security alerts without a wait, minor and major updates (new functions) after 7 days (D-46); lock file refreshes at any time and without a wait (D-47); automerge only after the checks are green | `renovate/default.json` | Done (the grouping of image and policy bumps lives in the consumer's own Renovate config; the preset has no rule for own images, which it disables) |
 | G-B6 | Public repos: open code scanning alerts of severity high or above block the merge (ruleset rule); Semgrep rules are pinned in the toolbox instead of fetched at run time | ruleset `code_scanning` rule; `toolbox/` | Planned (CodeQL uploads SARIF but does not gate; `p/default` is fetched unpinned) |
 
 ### 4.4 Artifacts and evidence
