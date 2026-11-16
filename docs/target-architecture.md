@@ -94,7 +94,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-B2 | Fixable HIGH/CRITICAL blocks, unfixable reported; licence deny-list (AGPL/GPL-3/SSPL) blocks | job summaries | Done (v3.2.0, D-42) |
 | G-B3 | Public PRs: dependency review blocks new high-severity dependencies | `ci.yml` | Done (v3.1.0) |
 | G-B4 | Lockfiles with hashes, base images by digest (Renovate), OS updates at build | Dockerfiles, Renovate | Partial (per repo) |
-| G-B5 | Renovate: 7-day cooldown, 0 days for security fixes, automerge only after the age and checks | `renovate/default.json` | Done (the grouping of image and policy bumps lives in the consumer's own Renovate config; the preset has no rule for own images, which it disables) |
+| G-B5 | Renovate: patch, digest and pin updates and security alerts without a wait, minor and major updates (new functions) after 7 days (D-46); automerge only after the checks are green | `renovate/default.json` | Done (the grouping of image and policy bumps lives in the consumer's own Renovate config; the preset has no rule for own images, which it disables) |
 | G-B6 | Public repos: open code scanning alerts of severity high or above block the merge (ruleset rule); Semgrep rules are pinned in the toolbox instead of fetched at run time | ruleset `code_scanning` rule; `toolbox/` | Planned (CodeQL uploads SARIF but does not gate; `p/default` is fetched unpinned) |
 
 ### 4.4 Artifacts and evidence
@@ -136,11 +136,11 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-V1 | Remediation SLAs: Critical 7 d, High 30 d, Medium 90 d | [decisions.md](decisions.md) (D-36) | Done |
+| G-V1 | A fix of any severity is applied immediately and never delayed by a release-age wait; a wait (7 days) applies only to updates that bring new functions. The severity SLAs of D-36 are superseded | [decisions.md](decisions.md) (D-46), `renovate/default.json` | Done (D-46; known limit: no Renovate alerts for container images, a fix shipped as a minor version is bumped by hand) |
 | G-V2 | Exceptions only in `.security/exceptions.json` (`id`, `kind`, `reason`, `owner`, `expires`); `owner` required; an exception is valid for at most 90 days; expired ones reported | `ci.yml` | Partial (v3.1.0: schema, expiry report; `owner` only warns and there is no maximum validity; both required in v4.0.0) |
 | G-V3 | Not-affected findings as OpenVEX, applied to all scans | `.security/vex.openvex.json` | Done (v3.1.0) |
 | G-V4 | Running images re-scanned weekly | in-cluster job | Done (weekly CronJob in the app cluster since 2026-11-09; first scheduled run 2026-11-15) |
-| G-V5 | Findings carry KEV and EPSS, and the fix order follows them inside the SLAs of G-V1 | scan summary, Dependency-Track | Planned |
+| G-V5 | Findings carry KEV and EPSS, and the fix order follows them (all fixes are applied immediately, G-V1; KEV/EPSS decide what is looked at first) | scan summary, Dependency-Track | Planned |
 
 ### 4.7 Release and operations
 
@@ -150,7 +150,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 | G-R2 | Toolbox image private, digest-pinned, rebuilt and signed by `toolbox.yml`; the digest the workflows use is at most 14 days behind the toolbox built from `main` | GHCR | Partial (private, pinned, signed: Done; the workflows still use the digest of 2026-11-04 because the Renovate preset disables the organisation's own images) |
 | G-R3 | OpenSSF Scorecard weekly, public | `scorecard.yml` | Done |
 | G-R4 | Security-relevant org settings declared in `fleet/repos.json` | `fleet-drift.yml` | Done |
-| G-R5 | Every caller pins the newest release within 7 days of its publication; `fleet-drift.yml` reports older pins and references to reusable workflows that no longer exist | `fleet-drift.yml` report | Planned (2026-11-13: 6 of 9 callers on v3.2.0; two callers reference a removed workflow and their weekly scan fails) |
+| G-R5 | Every caller pins the newest patch release at once and the newest minor release within 7 days of its publication (D-46); `fleet-drift.yml` reports older pins and references to reusable workflows that no longer exist | `fleet-drift.yml` report | Planned (2026-11-13: 6 of 9 callers on v3.2.0; two callers reference a removed workflow and their weekly scan fails) |
 | G-R6 | Scheduled scans cannot be cancelled by pushes (the caller template excludes `schedule` from `cancel-in-progress`), and the weekly full scan of every caller succeeds within its interval | caller workflows; run history | Planned (2026-11-13: weekly runs cancelled by pushes in two callers) |
 
 ## 5. Invariants
@@ -168,7 +168,7 @@ ship (use a time-limited, owned exception).
 | Private repos without CodeQL, GitHub secret scanning, artifact attestations | Paid features | Semgrep, Bandit, TruffleHog, cosign attestations | If plans change |
 | Rootless BuildKit needs relaxed seccomp/AppArmor (default scale set: custom Localhost profiles; other scale sets: unconfined) | No free sandbox works on the CI hardware (nested Kata failed) | Ephemeral pod, user namespaces, no privileges, network policy, separate cluster | When the other scale sets get the custom profiles |
 | SLSA Build L1 plus signature for private repos (public repos: L2 is a goal, G-A8) | Platform provenance needs Enterprise | Provenance from OIDC claims in a separate sign job | L3 milestone |
-| Dependency-Track reporting only | Build gate is Trivy | SLAs, weekly re-scan | n/a |
+| Dependency-Track reporting only | Build gate is Trivy | Immediate fixes (G-V1), weekly re-scan | n/a |
 
 ## 7. Maturity levels
 
@@ -186,14 +186,14 @@ Status as of v3.3.0 (see `VERSION`, [decisions.md](decisions.md), tags v3.0.2 to
 |---|---|---|
 | Own images running that pass the full deploy contract | 100 % | Not measured here (admission enforces it for the three image policies) |
 | Actions/images referenced by mutable tag | 0 | 0 `uses:` in this repo's workflows without a full SHA |
-| Open fixable Critical/High past SLA | 0 | Not measured |
+| Open fixable findings of any severity older than 1 day (G-V1) | 0 | Not measured |
 | Expired exceptions | 0 | Not measured |
 | `fleet-drift.yml` | green every week | Never run (secret missing) |
 | OpenSSF Scorecard (this repo) | >= 7.5 (D-45; 8.0 cannot be reached by one maintainer: Code-Review and Contributors score 0 by construction, Fuzzing has no target). Per check: License, Security-Policy, Branch-Protection (linear history) and the OpenSSF Best Practices badge to their maximum; Maintained resolves with repository age | 6.4 (2026-11-13) |
-| Callers behind the newest release for more than 7 days | 0 | 6 of 9 (2026-11-13) |
+| Callers behind the newest release for more than 1 day (patch) or 8 days (minor) | 0 | 6 of 9 (2026-11-13) |
 | Weekly full scan succeeded in every caller with a weekly schedule | 100 % | 4 of 8 (week of 2026-11-09: two failed at start, two were cancelled by pushes) |
 | Age of the toolbox digest used by the workflows | <= 14 days behind `main` | digest of 2026-11-04 in use while `main` pins newer scanner versions (2026-11-13) |
-| Security fix available to released image | within SLA; Renovate security PRs merged within 48 h | Not measured |
+| Security fix available to released image | Fix applied immediately (G-V1); Renovate security PRs merged within 48 h | Not measured |
 
 ## 9. Governance
 
