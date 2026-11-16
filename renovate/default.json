@@ -8,9 +8,8 @@
     ":dependencyDashboard"
   ],
   "timezone": "Europe/Berlin",
-  "minimumReleaseAge": "7 days",
   "vulnerabilityAlerts": {
-    "description": "Security fixes skip the release-age wait (the 7-day default is for ordinary updates only) and are labelled so they stand out.",
+    "description": "Security fixes skip any release-age wait and are labelled so they stand out. Renovate has no vulnerability alerts for container images: a fix shipped as a minor version waits 7 days there and is bumped by hand.",
     "enabled": true,
     "minimumReleaseAge": "0 days",
     "labels": [
@@ -21,7 +20,25 @@
   "prHourlyLimit": 4,
   "packageRules": [
     {
-      "description": "Small, aged updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR \u2014 which release gates such as bahnbot's policy job require.",
+      "description": "Fixes and refreshes (patch, digest, pin, pinDigest) are applied at once: no release-age wait. Rule order matters (later rules win); this rule and the next come first so the more specific rules below can override them.",
+      "matchUpdateTypes": [
+        "patch",
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "minimumReleaseAge": "0 days"
+    },
+    {
+      "description": "New functions (minor, major) wait 7 days after release before they are proposed.",
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Small updates merge themselves once every required check is green. Renovate merges the PR itself (platformAutomerge off: GitHub's auto-merge needs a paid plan for private repos), so every update lands as a merged PR \u2014 which release gates such as bahnbot's policy job require.",
       "matchUpdateTypes": [
         "minor",
         "patch",
@@ -43,7 +60,7 @@
       ]
     },
     {
-      "description": "Our own reusable workflows, rollout ring 'stable': all pins move together, 3 days after a non-breaking release, once the gate is green.",
+      "description": "Our own reusable workflows, rollout ring 'stable': all pins move together once the gate is green; patch, digest and pin updates at once, a minor release (new functions) after the 7 days set by the age rules at the top.",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
       ],
@@ -55,12 +72,11 @@
         "pinDigest"
       ],
       "groupName": "security-pipeline",
-      "minimumReleaseAge": "3 days",
       "automerge": true,
       "automergeType": "pr"
     },
     {
-      "description": "Our own reusable workflows, rollout ring 'canary' (keep in sync with fleet/repos.json): one private and one public repo take a release at once and surface problems first.",
+      "description": "Our own reusable workflows, rollout ring 'canary' (keep in sync with fleet/repos.json): one private and one public repo take every release at once, minor releases 7 days before the stable ring, and surface problems first.",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
       ],
