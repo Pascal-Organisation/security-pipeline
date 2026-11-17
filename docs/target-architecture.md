@@ -117,7 +117,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 1. Signature: keyless, issuer `https://token.actions.githubusercontent.com`, subject
    `https://github.com/Pascal-Organisation/security-pipeline/.github/workflows/build-container.yml@<SHA>`, where
    `<SHA>` is the commit of a signed release tag of this repository. The consumer keeps that list in git and
-   generates it from the tags (D-45; until the consumer has switched, any 40-hex SHA is accepted, D-5).
+   generates it from the tags (D-45; homelab `pin-pipeline-release.sh`, roadmap 2.4; before that any 40-hex SHA was accepted, D-5).
 2. Provenance attestation: `externalParameters.workflow.repository` = the app's repo, `ref` = `refs/heads/main`;
    from v3.1.0 also `builder.id` = the reusable workflow at a pinned SHA, and event `push`.
 3. CycloneDX SBOM attestation present.
@@ -127,7 +127,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-D1 | Items 1-3, 5, 6 enforced at admission, fail-closed, no match = deny | ClusterImagePolicies | Partial (items 2, 3, 5, 6 and the workflow identity are enforced, fail-closed; item 1 as restated by D-45 is open: consumers accept any 40-hex commit of `build-container.yml`, including commits on unmerged branches) |
+| G-D1 | Items 1-3, 5, 6 enforced at admission, fail-closed, no match = deny | ClusterImagePolicies | Partial (items 2, 3, 5, 6 and the workflow identity are enforced, fail-closed; item 1 as restated by D-45 is implemented by homelab PR for roadmap 2.4 (draft until the pre-merge check passes); status becomes Done when that PR is merged and an unlisted commit is denied in a scratch namespace; until then consumers accept any 40-hex commit) |
 | G-D2 | Item 2 (builder.id, event) and item 4 enforced | ClusterImagePolicies | Done (app cluster, 2026-11-09) |
 | G-D3 | Pull-based deploys; CI never holds runtime credentials | updater design | Done |
 | G-D4 | Runtime manifests reconciled from git (GitOps) | live state vs git | Partial (a GitOps controller reconciles every app-cluster unit from `main` since 2026-11-11; commits are not signature-verified and pruning is off, so the stretch goal of signed GitOps is open) |
@@ -146,7 +146,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-R1 | Release order: merge, signed annotated tag, GitHub Release, consumer's list of builder commits regenerated from the tags (automated, no hand edit), caller pin bumps | [release.md](release.md) | Partial (order documented; v3.3.0 was released before its tag was signed, D-44; the consumer list is not generated yet because any SHA is trusted, D-5) |
+| G-R1 | Release order: merge, signed annotated tag, GitHub Release, consumer's list of builder commits regenerated from the tags (automated, no hand edit), caller pin bumps | [release.md](release.md) | Partial (order documented; v3.3.0 was released before its tag was signed, D-44; the consumer list generator exists in homelab (roadmap 2.4), Done when its PR is merged and step 5 of release.md was run once) |
 | G-R2 | Toolbox image private, digest-pinned, rebuilt and signed by `toolbox.yml`; the digest the workflows use is at most 14 days behind the toolbox built from `main` | GHCR | Partial (private, pinned, signed: Done; the pin is moved by hand until the job `pin` of `toolbox.yml` (D-49, PR `bot/toolbox-pin`, auto-merge) is live; it needs the GitHub App and two secrets, then every signed build is pinned within the PR's CI time; a release for callers stays manual) |
 | G-R3 | OpenSSF Scorecard weekly, public | `scorecard.yml` | Done |
 | G-R4 | Security-relevant org settings declared in `fleet/repos.json` | `fleet-drift.yml` | Done |
