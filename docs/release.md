@@ -14,3 +14,17 @@
 - Cluster policies match any SHA of `build-container.yml` of this repo, so a release needs no cluster change.
 - Toolbox: `toolbox.yml` builds and signs `ci-toolbox` on `main`; the digest in `TOOLBOX` (`ci.yml`, `build-container.yml`) is meant to be bumped by Renovate. Known gap (checked 2026-11-11): the pin has not moved since 2026-11-04 although the toolbox was rebuilt several times, and the shared preset disables Renovate for `ghcr.io/pascal-organisation/**`; until that is fixed, bump it by hand after `toolbox.yml` has signed a new image.
 - Caller contract changes (input, secret, check name, workflow path) are a major release; Renovate does not automerge majors.
+
+## Toolbox pin automation
+
+Job `pin` in `toolbox.yml` (D-49) keeps the `TOOLBOX` pins (`ci.yml`, `build-container.yml`) on the newest signed toolbox. After `build` has pushed and signed on `main`, it verifies signature and SBOM attestation, commits the new digest to `bot/toolbox-pin` (contents API as a GitHub App, so the commit is signed and verified), opens or updates the PR and sets auto-merge (squash); required checks and the ruleset still apply and the PR's CI already runs on the new digest. No change, no PR; missing secrets, only a warning. A merged bump is followed by a patch release by the owner (steps above; the PR body has the commands); tags are never created by the job.
+
+Owner setup, once:
+
+1. github.com/settings/apps/new (or the organisation's Developer settings): name `security-pipeline toolbox-pin`, homepage any URL, Webhook: off. Repository permissions: Contents Read and write, Pull requests Read and write, Metadata Read (implied); nothing else. Install on Only select repositories: `security-pipeline`.
+2. In the App settings generate a private key (`.pem`) and note the App ID.
+3. Repository secrets of `security-pipeline` (Settings > Secrets and variables > Actions): `TOOLBOX_PIN_APP_ID` (the App ID) and `TOOLBOX_PIN_APP_KEY` (whole `.pem` content). Delete the local `.pem` afterwards.
+4. "Allow GitHub Actions to create and approve pull requests" is not needed: it applies to `GITHUB_TOKEN` only, and the job uses the App token. Auto-merge is already allowed on the repository.
+5. Run `ci-toolbox` once via workflow_dispatch on `main` to test; a PR `bot/toolbox-pin` appears if the pin is behind.
+
+Known limit: with "require branches up to date" a bump PR that falls behind `main` waits until the next toolbox run recreates it or someone updates the branch.

@@ -3,6 +3,9 @@
 ## The toolbox is the runner image of the self-hosted CI cluster and the job container on GitHub-hosted
 ## runners (see toolbox/Dockerfile). Pull requests only build and scan; main pushes and signs.
 ## Consumers pin it by digest; the signature identity is this workflow on refs/heads/main.
+## Job `pin` (D-49) then opens/updates the PR `bot/toolbox-pin` that moves the TOOLBOX pins of ci.yml and build-container.yml
+## to the new digest; it is a job of this workflow, not a workflow_run workflow, so it gets the digest as a job output and
+## never checks out or runs repo code while it holds the App token.
 name: ci-toolbox
 
 on:
@@ -33,6 +36,8 @@ jobs:
       contents: read
       packages: write # push the toolbox image + signature
       id-token: write # keyless signing
+    outputs:
+      digest: ${{ steps.push.outputs.digest }} # empty unless this run pushed and signed (main only)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,6 +66,7 @@ jobs:
             --exit-code 1 --skip-db-update
 
       - name: Push, SBOM, sign
+        id: push
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,4 +80,136 @@ jobs:
           cosign sign --yes "$IMAGE@$digest"
           cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/sbom.cdx.json" "$IMAGE@$digest"
           docker logout ghcr.io
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "### ci-toolbox: \`$IMAGE@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  pin:
+    name: Pin PR
+    needs: build
+    if: needs.build.outputs.digest != '' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read # cosign reads the signature and attestation of the private image
+    env:
+      IMAGE: ghcr.io/pascal-organisation/ci-toolbox
+      DIGEST: ${{ needs.build.outputs.digest }}
+      IDENTITY_RE: '^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/toolbox\.yml@refs/heads/main$'
+      ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      # Gate: the digest is only written to git if signature and SBOM attestation verify against the signer identity.
+      - name: Verify signature and attestation
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::odd digest"; exit 1; }
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"; mkdir -p "$DOCKER_CONFIG"
+          printf '%s' "$TOKEN" | cosign login ghcr.io -u "$ACTOR" --password-stdin >/dev/null
+          flags=(--certificate-identity-regexp "$IDENTITY_RE" --certificate-oidc-issuer "$ISSUER")
+          cosign verify "$IMAGE@$DIGEST" "${flags[@]}" >/dev/null
+          cosign verify-attestation --type cyclonedx "$IMAGE@$DIGEST" "${flags[@]}" >/dev/null
+          rm -rf "$DOCKER_CONFIG"
+          echo "Verified $IMAGE@$DIGEST (signature + cyclonedx attestation)"
+
+      # No secrets, no PR: the pin then stays as it is and the owner bumps it by hand (docs/release.md).
+      - name: Check App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.TOOLBOX_PIN_APP_ID }}
+          APP_KEY: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then echo "have=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::TOOLBOX_PIN_APP_ID / TOOLBOX_PIN_APP_KEY are not set: toolbox pin PR skipped (see docs/release.md, Toolbox pin automation)"; fi
+
+      # GitHub App token: PRs made with GITHUB_TOKEN do not start CI. Scoped to this repository (default) and to
+      # Contents + Pull requests write; the App has no other permission.
+      - name: App token
+        id: app
+        if: steps.creds.outputs.have == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TOOLBOX_PIN_APP_ID }}
+          private-key: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Commits are made with the contents API as the App: GitHub signs those itself (verified), which ruleset
+      # "protect main" requires; `git commit` in the runner would be unsigned. The step checks `verification.verified`.
+      - name: Open or update PR
+        if: steps.creds.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          branch="bot/toolbox-pin"; files=(.github/workflows/ci.yml .github/workflows/build-container.yml)
+          re='^([[:space:]]*TOOLBOX: ghcr\.io/pascal-organisation/ci-toolbox:latest@)sha256:[0-9a-f]{64}$'
+          main_sha="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
+          raw() { gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/$1?ref=$2"; }
+          # current pins on main (exactly one TOOLBOX line per file)
+          old=""
+          for f in "${files[@]}"; do
+            [ "$(raw "$f" main | grep -cE "$re")" = 1 ] || { echo "::error::$f: expected exactly one TOOLBOX pin line"; exit 1; }
+            o="$(raw "$f" main | grep -E "$re" | grep -oE 'sha256:[0-9a-f]{64}')"
+            [ -z "$old" ] && old="$o"
+            [ "$o" = "$old" ] || { echo "::error::pins differ between workflows ($old vs $o); fix by hand"; exit 1; }
+          done
+          if [ "$old" = "$DIGEST" ]; then echo "Pin already at $DIGEST: no PR."; exit 0; fi
+          # an open PR that already carries this digest: nothing to do (do not restart its CI)
+          if gh api "repos/$REPO/contents/${files[0]}?ref=$branch" -H "Accept: application/vnd.github.raw" 2>/dev/null | grep -qF "$DIGEST"; then
+            pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+            if [ -n "$pr" ]; then echo "PR #$pr already pins $DIGEST."; exit 0; fi
+          fi
+          # (re)create the bot branch from the current main head; only this App writes to it
+          if gh api "repos/$REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$main_sha" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$main_sha" >/dev/null
+          fi
+          msg="toolbox pin: ${old:7:12} -> ${DIGEST:7:12}"
+          for f in "${files[@]}"; do
+            blob="$(gh api "repos/$REPO/contents/$f?ref=main" --jq .sha)"
+            new="$(raw "$f" main | sed -E "s/$re/\1$DIGEST/" | base64 -w0)"
+            last="$(gh api -X PUT "repos/$REPO/contents/$f" -f message="$msg" -f content="$new" -f sha="$blob" -f branch="$branch" --jq .commit.sha)"
+            # contents-API commits are signed by GitHub for an App; do not open a PR the ruleset would reject
+            [ "$(gh api "repos/$REPO/commits/$last" --jq .commit.verification.verified)" = true ] \
+              || { echo "::error::commit $last is not verified; ruleset 'protect main' would reject it"; exit 1; }
+          done
+          next="$(raw VERSION main | tr -d '[:space:]')"; next="${next%.*}.$(( ${next##*.} + 1 ))"
+          title="toolbox pin: ci-toolbox ${DIGEST:0:19}"
+          {
+            echo "Moves the \`TOOLBOX\` pin in \`ci.yml\` and \`build-container.yml\` to the newest signed ci-toolbox (D-49, G-R2)."
+            echo
+            echo "- old: \`$old\`"
+            echo "- new: \`$DIGEST\`"
+            echo "- built and signed by: $RUN_URL (main @ \`${SHA:0:12}\`)"
+            echo "- verified before this PR was written: \`cosign verify\` and \`cosign verify-attestation --type cyclonedx\` with identity \`$IDENTITY_RE\`, issuer \`$ISSUER\`: OK"
+            echo "- the CI of this PR already runs on the new digest (ci.yml calls the toolbox through its own \`TOOLBOX\`); auto-merge (squash) is set and waits for the required checks."
+            echo
+            echo "After merge a patch release is needed so callers get the new toolbox (owner, signed tag; not automated). Next patch by VERSION on main: \`$next\`."
+            echo
+            echo '```bash'
+            echo "# 1. PR: VERSION and PIPELINE_VERSION (build-container.yml) -> $next, merge (signed)"
+            echo "git fetch origin && git tag -s -a $next <merge-sha> -m $next && git push origin $next"
+            echo "git fetch --tags && git cat-file -t $next && git tag -v $next"
+            echo "gh release create $next --verify-tag --generate-notes"
+            echo '```'
+            echo
+            echo "Rollback: close this PR; after a merge, revert it (the previous digest stays valid)."
+          } > "$RUNNER_TEMP/body.md"
+          pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" -R "$REPO" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create -R "$REPO" --base main --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number')"
+          fi
+          gh pr merge "$pr" -R "$REPO" --auto --squash
+          echo "Pin PR #$pr: $old -> $DIGEST (auto-merge set)" | tee -a "$GITHUB_STEP_SUMMARY"
