@@ -95,7 +95,7 @@ env:
   # equal to the VERSION file and the release tag.
   PIPELINE_VERSION: v3.4.1
   # same pin as in ci.yml (Renovate moves both)
-  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:2f9ba2eef4fcf948dbf3ac9b18eddaf1d98f48b6131b53e745da38fb77d0f208
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:dac74fbc97a6fde2884ca1bd346e978a3034c89df8d6221edc9efeb625894857
 
 jobs:
   # A direct push still lands in git on GitHub Free; it just never gets signed.
