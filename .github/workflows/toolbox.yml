@@ -153,6 +153,16 @@ jobs:
           branch="bot/toolbox-pin"; files=(.github/workflows/ci.yml .github/workflows/build-container.yml)
           re='^([[:space:]]*TOOLBOX: ghcr\.io/pascal-organisation/ci-toolbox:latest@)sha256:[0-9a-f]{64}$'
           main_sha="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
+          # Rewrite with bash only: no regex value is spliced into a sed expression (the image path contains "/").
+          # stdin -> stdout, exactly one pin line is replaced, anything else is an error.
+          rewrite_pin() {
+            local line n=0
+            while IFS= read -r line || [ -n "$line" ]; do
+              if [[ "$line" =~ $re ]]; then line="${BASH_REMATCH[1]}$DIGEST"; n=$((n + 1)); fi
+              printf '%s\n' "$line"
+            done
+            [ "$n" = 1 ] || { echo "::error::expected exactly one TOOLBOX pin line, found $n" >&2; return 1; }
+          }
           raw() { gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/$1?ref=$2"; }
           # current pins on main (exactly one TOOLBOX line per file)
           old=""
@@ -177,7 +187,7 @@ jobs:
           msg="toolbox pin: ${old:7:12} -> ${DIGEST:7:12}"
           for f in "${files[@]}"; do
             blob="$(gh api "repos/$REPO/contents/$f?ref=main" --jq .sha)"
-            new="$(raw "$f" main | sed -E "s/$re/\1$DIGEST/" | base64 -w0)"
+            new="$(raw "$f" main | rewrite_pin | base64 -w0)"
             last="$(gh api -X PUT "repos/$REPO/contents/$f" -f message="$msg" -f content="$new" -f sha="$blob" -f branch="$branch" --jq .commit.sha)"
             # contents-API commits are signed by GitHub for an App; do not open a PR the ruleset would reject
             [ "$(gh api "repos/$REPO/commits/$last" --jq .commit.verification.verified)" = true ] \
