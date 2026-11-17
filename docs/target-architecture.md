@@ -63,15 +63,15 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | ID | Goal | Verify | Status |
 |---|---|---|---|
 | G-S1 | Public repos: default branch protected by a ruleset (PR, no force-push/deletion, check `security-gate`, strict checks, stale approvals dismissed, conversations resolved, signed commits) | `gh api repos/<r>/rulesets/<id>`; `fleet-drift.yml` | Done (approvals = 0, section 6) |
-| G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Partial (present in 5 of 10 repos checked 2026-11-11; missing in 5 callers; informational only, no ruleset requires code-owner review) |
-| G-S3 | Release tags `v*` signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (tag ruleset incl. required signatures is live; immutable releases are off (owner setting); v3.3.0 is an unsigned lightweight tag, D-44) |
+| G-S2 | `CODEOWNERS` in every repo covering `.github/`, `toolbox/`, `renovate/`, admission policies | file present | Done 2026-11-17 (`.github/CODEOWNERS` in all 10 active repos; informational only, no ruleset requires code-owner review; presence not drift-checked) |
+| G-S3 | Release tags `v*` signed and immutable (tag ruleset, immutable releases) | `git tag -v vX.Y.Z`; release settings | Partial (tag ruleset incl. required signatures is live; immutable releases are off (owner setting); v3.3.0, v3.4.0 and v3.4.1 are unsigned lightweight tags (D-44); v3.4.2, released 2026-11-17 on `859a359`, is the first signed annotated tag since v3.2.0 (ED25519 key `SHA256:TYGteEU1VyYgCcHNI1UG/PGHh6hA68pJY4JX8JGjJNw`, the laptop software key; its move to a hardware key is homelab roadmap 2.7)) |
 | G-S4 | Org allows only GitHub-owned actions, `Pascal-Organisation/*` and an explicit list; every `uses:` pinned to a full SHA | `gh api orgs/<org>/actions/permissions` | Done |
 | G-S5 | Fork PRs from external contributors need approval before CI | repo Actions settings | Done |
 | G-S6 | Push protection on public repos; TruffleHog on every push/PR, full history weekly; a finding that cannot leave history is accepted only through a `secret-scan` exception (exact detector, file and commit, owner, at most 90 days, never verified, D-48) | settings, `ci.yml` | Done (exceptions: with the release after D-48) |
 | G-S7 | `SECURITY.md` and private vulnerability reporting | repo settings | Done |
 | G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (workflow and script exist; it has never run: the secret `FLEET_DRIFT_TOKEN` is not set and the first schedule is 2026-11-16; run locally on 2026-11-11 the script reports 6 differences, see G-C5) |
 | G-S9 | Organisation requires 2FA | org settings | Partial (the sole member has 2FA; the organisation requirement setting reads disabled on 2026-11-11) |
-| G-S10 | Rulesets cover every branch of this repository (signed commits, no force-push), so no unreviewed commit can become a builder identity | `gh api repos/<r>/rulesets` | Partial (D-51: `tools/fleet-rulesets.sh` defines signatures on every branch and no force-push except `renovate/**` and `bot/toolbox-pin`; Partial until the owner applies it. "Changes under `.github/` only by PR" cannot be enforced on non-default branches on this plan: push rulesets are private/internal only, required reviewers needs teams) |
+| G-S10 | Rulesets cover every branch of this repository (signed commits, no force-push), so no unreviewed commit can become a builder identity | `gh api repos/<r>/rulesets` | Partial (D-51: `tools/fleet-rulesets.sh` defines signatures on every branch and no force-push except `renovate/**` and `bot/toolbox-pin`; applied live 2026-11-17 (both rulesets active). Partial because "Changes under `.github/` only by PR" cannot be enforced on non-default branches on this plan: push rulesets are private/internal only, required reviewers needs teams) |
 | G-S11 | GitHub Apps installed on the organisation have access to selected repositories only and hold no write permission they do not use | `gh api orgs/<org>/installations` | Planned (two apps hold contents and workflows write on all repositories, 2026-11-13) |
 
 ### 4.2 CI execution
@@ -127,7 +127,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-D1 | Items 1-3, 5, 6 enforced at admission, fail-closed, no match = deny | ClusterImagePolicies | Partial (items 2, 3, 5, 6 and the workflow identity are enforced, fail-closed; item 1 as restated by D-45 is implemented by homelab PR for roadmap 2.4 (draft until the pre-merge check passes); status becomes Done when that PR is merged and an unlisted commit is denied in a scratch namespace; until then consumers accept any 40-hex commit) |
+| G-D1 | Items 1-3, 5, 6 enforced at admission, fail-closed, no match = deny | ClusterImagePolicies | Done 2026-11-17 (items 1 to 3, 5, 6 enforced, fail-closed; item 1 as restated by D-45 and D-52: homelab #162 merged, builder commits pinned from signed tags; verified live: an image from the unlisted builder commit `84d30a98` was denied, one from the listed `38ca59d` was admitted; transitional unsigned pins v3.3.0, v3.4.0 and v3.4.1 expire 2026-12-15) |
 | G-D2 | Item 2 (builder.id, event) and item 4 enforced | ClusterImagePolicies | Done (app cluster, 2026-11-09) |
 | G-D3 | Pull-based deploys; CI never holds runtime credentials | updater design | Done |
 | G-D4 | Runtime manifests reconciled from git (GitOps) | live state vs git | Partial (a GitOps controller reconciles every app-cluster unit from `main` since 2026-11-11; commits are not signature-verified and pruning is off, so the stretch goal of signed GitOps is open) |
@@ -146,11 +146,11 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-R1 | Release order: merge, signed annotated tag, GitHub Release, consumer's list of builder commits regenerated from the tags (automated, no hand edit), caller pin bumps | [release.md](release.md) | Partial (order documented; v3.3.0 was released before its tag was signed, D-44; the consumer list generator exists in homelab (roadmap 2.4), Done when its PR is merged and step 5 of release.md was run once) |
-| G-R2 | Toolbox image private, digest-pinned, rebuilt and signed by `toolbox.yml`; the digest the workflows use is at most 14 days behind the toolbox built from `main` | GHCR | Partial (private, pinned, signed: Done; the pin is moved by hand until the job `pin` of `toolbox.yml` (D-49, PR `bot/toolbox-pin`, auto-merge) is live; it needs the GitHub App and two secrets, then every signed build is pinned within the PR's CI time; a release for callers stays manual) |
+| G-R1 | Release order: merge, signed annotated tag, GitHub Release, consumer's list of builder commits regenerated from the tags (automated, no hand edit), caller pin bumps | [release.md](release.md) | Done 2026-11-17 (v3.3.0 was released before its tag was signed, D-44; the consumer list generator is merged in homelab (roadmap 2.4, #162) and step 5 was run (v3.4.2 is in the list); release.md has the step since #71) |
+| G-R2 | Toolbox image private, digest-pinned, rebuilt and signed by `toolbox.yml`; the digest the workflows use is at most 14 days behind the toolbox built from `main` | GHCR | Partial (private, pinned, signed: Done; the job `pin` of `toolbox.yml` (D-49) is proven live 2026-11-17: bot PR #68 merged itself, release PR #69 followed; every signed build is pinned within the PR's CI time; a release for callers stays manual) |
 | G-R3 | OpenSSF Scorecard weekly, public | `scorecard.yml` | Done |
 | G-R4 | Security-relevant org settings declared in `fleet/repos.json` | `fleet-drift.yml` | Done |
-| G-R5 | Every caller pins every non-major release of the pipeline (minor, patch, digest) at once (D-50, amends D-46); `fleet-drift.yml` reports older pins and references to reusable workflows that no longer exist | `fleet-drift.yml` report | Planned (2026-11-13: 6 of 9 callers on v3.2.0; two callers reference a removed workflow and their weekly scan fails) |
+| G-R5 | Every caller pins every non-major release of the pipeline (minor, patch, digest) at once (D-50, amends D-46); `fleet-drift.yml` reports older pins and references to reusable workflows that no longer exist | `fleet-drift.yml` report | Partial (D-50 live: on 2026-11-17 all 8 callers are on v3.4.2; seven by Renovate automerge, `app-template` by hand (app-template#8) because Renovate has not processed that template repo since 2026-11-13; automerge on private repos lags by hours (Mend scheduling); `fleet-drift.yml` does not run yet, the secret `FLEET_DRIFT_TOKEN` is missing (homelab roadmap 2.1)) |
 | G-R6 | Scheduled scans cannot be cancelled by pushes (the caller template excludes `schedule` from `cancel-in-progress`), and the weekly full scan of every caller succeeds within its interval | caller workflows; run history | Planned (2026-11-13: weekly runs cancelled by pushes in two callers) |
 
 ## 5. Invariants
@@ -172,12 +172,12 @@ ship (use a time-limited, owned exception).
 
 ## 7. Maturity levels
 
-Status as of v3.3.0 (see `VERSION`, [decisions.md](decisions.md), tags v3.0.2 to v3.3.0).
+Status as of v3.4.2 (see `VERSION`, [decisions.md](decisions.md), tags v3.0.2 to v3.4.2).
 
 | Level | Meaning | Status |
 |---|---|---|
 | **L1 Baseline** | Signed images, SBOM, fail-closed admission, pinned actions, gates | Reached (v3.0.x, 2026-11-04) |
-| **L2 Hardened** | Nothing unreviewed can sign or be admitted: G-S1 to G-S11, G-C1 to G-C7, G-B1 to G-B3, G-B5, G-A1 to G-A5, G-D1 to G-D3, G-V1 to G-V3, G-R1, G-R3, G-R4 | Not yet reached. Open: G-S2, G-S3, G-S8, G-S9, G-S10, G-S11, G-C5, G-D1 (builder commits), G-R1 |
+| **L2 Hardened** | Nothing unreviewed can sign or be admitted: G-S1 to G-S11, G-C1 to G-C7, G-B1 to G-B3, G-B5, G-A1 to G-A5, G-D1 to G-D3, G-V1 to G-V3, G-R1, G-R3, G-R4 | Not yet reached. Open: G-S3, G-S8, G-S9, G-S10, G-S11, G-C5 |
 | **L3 Verified** | Evidence beyond prevention: SLSA Build L2 for public repos (G-A8), code scanning gate (G-B6), exceptions with owner and 90 days (G-V2), KEV/EPSS (G-V5), fresh toolbox and fleet (G-R2, G-R5, G-R6), signed GitOps (G-D4), Scorecard KPI; stretch: G-A6, G-A7 | Done: licence gate (D-42), weekly runtime re-scan (G-V4). Open: the rest |
 
 ## 8. KPIs
