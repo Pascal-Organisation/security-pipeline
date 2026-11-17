@@ -184,6 +184,7 @@ jobs:
           # (optionally line), exact match only, no globs. Verified findings are never suppressible; an expired
           # entry stops matching; expires is at most 90 days ahead; owner is required.
           # BEGIN secret-scan-validate
+          # shellcheck disable=SC2016 # jq variables, not shell expansions
           validate='
             all(.exceptions[]? | select(.kind == "secret-scan");
               (.id | type == "string" and test("^[A-Za-z0-9._:/-]+$"))
@@ -197,6 +198,7 @@ jobs:
           '
           # END secret-scan-validate
           # BEGIN secret-scan-filter
+          # shellcheck disable=SC2016 # jq variables, not shell expansions
           filter='
             . as $f
             | ($f.SourceMetadata.Data.Git // {}) as $g
