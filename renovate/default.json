@@ -60,7 +60,7 @@
       ]
     },
     {
-      "description": "Our own reusable workflows, rollout ring 'stable': all pins move together once the gate is green; patch, digest and pin updates at once, a minor release (new functions) after the 7 days set by the age rules at the top.",
+      "description": "Our own reusable workflows, rollout ring 'stable': all pins move together once the gate is green; every non-major release (minor, patch, digest, pin, pinDigest) is proposed at once (D-50), overriding the 7-day wait of the general minor rule at the top. Majors have their own rule below.",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
       ],
@@ -72,11 +72,12 @@
         "pinDigest"
       ],
       "groupName": "security-pipeline",
+      "minimumReleaseAge": "0 days",
       "automerge": true,
       "automergeType": "pr"
     },
     {
-      "description": "Our own reusable workflows, rollout ring 'canary' (keep in sync with fleet/repos.json): one private and one public repo take every release at once, minor releases 7 days before the stable ring, and surface problems first.",
+      "description": "Our own reusable workflows, rollout ring 'canary' (keep in sync with fleet/repos.json): one private and one public repo. Since D-50 the stable ring also takes every non-major release at once, so this rule no longer leads by 7 days and changes nothing; it is kept so the ring list stays in the config and a staged rollout (a wait on the stable rule, 0 days here) needs only one edit.",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
       ],

@@ -150,7 +150,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 | G-R2 | Toolbox image private, digest-pinned, rebuilt and signed by `toolbox.yml`; the digest the workflows use is at most 14 days behind the toolbox built from `main` | GHCR | Partial (private, pinned, signed: Done; the pin is moved by hand until the job `pin` of `toolbox.yml` (D-49, PR `bot/toolbox-pin`, auto-merge) is live; it needs the GitHub App and two secrets, then every signed build is pinned within the PR's CI time; a release for callers stays manual) |
 | G-R3 | OpenSSF Scorecard weekly, public | `scorecard.yml` | Done |
 | G-R4 | Security-relevant org settings declared in `fleet/repos.json` | `fleet-drift.yml` | Done |
-| G-R5 | Every caller pins the newest patch release at once and the newest minor release within 7 days of its publication (D-46); `fleet-drift.yml` reports older pins and references to reusable workflows that no longer exist | `fleet-drift.yml` report | Planned (2026-11-13: 6 of 9 callers on v3.2.0; two callers reference a removed workflow and their weekly scan fails) |
+| G-R5 | Every caller pins every non-major release of the pipeline (minor, patch, digest) at once (D-50, amends D-46); `fleet-drift.yml` reports older pins and references to reusable workflows that no longer exist | `fleet-drift.yml` report | Planned (2026-11-13: 6 of 9 callers on v3.2.0; two callers reference a removed workflow and their weekly scan fails) |
 | G-R6 | Scheduled scans cannot be cancelled by pushes (the caller template excludes `schedule` from `cancel-in-progress`), and the weekly full scan of every caller succeeds within its interval | caller workflows; run history | Planned (2026-11-13: weekly runs cancelled by pushes in two callers) |
 
 ## 5. Invariants
@@ -190,7 +190,7 @@ Status as of v3.3.0 (see `VERSION`, [decisions.md](decisions.md), tags v3.0.2 to
 | Expired exceptions | 0 | Not measured |
 | `fleet-drift.yml` | green every week | Never run (secret missing) |
 | OpenSSF Scorecard (this repo) | >= 7.5 (D-45; 8.0 cannot be reached by one maintainer: Code-Review and Contributors score 0 by construction, Fuzzing has no target). Per check: License, Security-Policy, Branch-Protection (linear history) and the OpenSSF Best Practices badge to their maximum; Maintained resolves with repository age | 6.4 (2026-11-13) |
-| Callers behind the newest release for more than 1 day (patch) or 8 days (minor) | 0 | 6 of 9 (2026-11-13) |
+| Callers behind the newest non-major pipeline release for more than 1 day | 0 | 6 of 9 (2026-11-13) |
 | Weekly full scan succeeded in every caller with a weekly schedule | 100 % | 4 of 8 (week of 2026-11-09: two failed at start, two were cancelled by pushes) |
 | Age of the toolbox digest used by the workflows | <= 14 days behind `main` | digest of 2026-11-04 in use while `main` pins newer scanner versions (2026-11-13) |
 | Security fix available to released image | Fix applied immediately (G-V1); Renovate security PRs merged within 48 h | Not measured |

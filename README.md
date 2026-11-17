@@ -95,8 +95,8 @@ names above, the workflow path `build-container.yml` (it is the signing identity
 ## Versioning and pinning
 
 - Callers pin the full commit SHA with a `# vX.Y.Z` comment; Renovate bumps it.
-- Preset: `local>Pascal-Organisation/security-pipeline//renovate/default` (digest pins, lock-file maintenance at any time without a wait, patch/digest/pin updates at once, minor updates after 7 days, both automerged once checks are green; majors and runtime-image minors by hand).
-- Rings: `canary` (`workingrepo`, `anmeldungunihandball`) takes a release at once; `stable` takes patch and digest releases at once and minor releases after `minimumReleaseAge` (7 days, new functions).
+- Preset: `local>Pascal-Organisation/security-pipeline//renovate/default` (digest pins, lock-file maintenance at any time without a wait, patch/digest/pin updates at once, minor updates after 7 days (except our own pipeline: every non-major release at once, D-50), all automerged once checks are green; majors and runtime-image minors by hand).
+- Rings: `canary` (`workingrepo`, `anmeldungunihandball`) and `stable` both take every non-major release of the pipeline at once (D-50); the canary ring no longer leads by 7 days and only marks the repos for a staged rollout. Majors are bumped by hand.
 - Releasing: [docs/release.md](docs/release.md).
 
 ## Runners
