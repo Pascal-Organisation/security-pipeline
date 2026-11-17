@@ -71,7 +71,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-S7 | `SECURITY.md` and private vulnerability reporting | repo settings | Done |
 | G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (workflow and script exist; it has never run: the secret `FLEET_DRIFT_TOKEN` is not set and the first schedule is 2026-11-16; run locally on 2026-11-11 the script reports 6 differences, see G-C5) |
 | G-S9 | Organisation requires 2FA | org settings | Partial (the sole member has 2FA; the organisation requirement setting reads disabled on 2026-11-11) |
-| G-S10 | Rulesets cover every branch of this repository (signed commits, no force-push), so no unreviewed commit can become a builder identity | `gh api repos/<r>/rulesets` | Planned (the ruleset covers only the default branch; a commit on any branch satisfies the signer pattern consumers accept today) |
+| G-S10 | Rulesets cover every branch of this repository (signed commits, no force-push), so no unreviewed commit can become a builder identity | `gh api repos/<r>/rulesets` | Partial (D-51: `tools/fleet-rulesets.sh` defines signatures on every branch and no force-push except `renovate/**` and `bot/toolbox-pin`; Partial until the owner applies it. "Changes under `.github/` only by PR" cannot be enforced on non-default branches on this plan: push rulesets are private/internal only, required reviewers needs teams) |
 | G-S11 | GitHub Apps installed on the organisation have access to selected repositories only and hold no write permission they do not use | `gh api orgs/<org>/installations` | Planned (two apps hold contents and workflows write on all repositories, 2026-11-13) |
 
 ### 4.2 CI execution
