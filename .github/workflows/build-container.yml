@@ -93,9 +93,9 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v3.4.0
+  PIPELINE_VERSION: v3.4.1
   # same pin as in ci.yml (Renovate moves both)
-  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:61757ab62d17b7142f3305e5f5b20bb7cd4012c078c9d1bc2d7e2393fc66c61d
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:2f9ba2eef4fcf948dbf3ac9b18eddaf1d98f48b6131b53e745da38fb77d0f208
 
 jobs:
   # A direct push still lands in git on GitHub Free; it just never gets signed.
