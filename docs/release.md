@@ -21,7 +21,7 @@ Job `pin` in `toolbox.yml` (D-49) keeps the `TOOLBOX` pins (`ci.yml`, `build-con
 
 Owner setup, once:
 
-1. github.com/settings/apps/new (or the organisation's Developer settings): name `security-pipeline toolbox-pin`, homepage any URL, Webhook: off. Repository permissions: Contents Read and write, Pull requests Read and write, Metadata Read (implied); nothing else. Install on Only select repositories: `security-pipeline`.
+1. github.com/settings/apps/new (or the organisation's Developer settings): name `security-pipeline toolbox-pin`, homepage any URL, Webhook: off. Repository permissions: Contents Read and write, Pull requests Read and write, Workflows Read and write (the pins are in workflow files; without it GitHub rejects the commit), Metadata Read (implied); everything else No access (no Packages). Install on Only select repositories: `security-pipeline`.
 2. In the App settings generate a private key (`.pem`) and note the App ID.
 3. Repository secrets of `security-pipeline` (Settings > Secrets and variables > Actions): `TOOLBOX_PIN_APP_ID` (the App ID) and `TOOLBOX_PIN_APP_KEY` (whole `.pem` content). Delete the local `.pem` afterwards.
 4. "Allow GitHub Actions to create and approve pull requests" is not needed: it applies to `GITHUB_TOKEN` only, and the job uses the App token. Auto-merge is already allowed on the repository.

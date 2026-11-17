@@ -127,7 +127,7 @@ jobs:
           else echo "::warning::TOOLBOX_PIN_APP_ID / TOOLBOX_PIN_APP_KEY are not set: toolbox pin PR skipped (see docs/release.md, Toolbox pin automation)"; fi
 
       # GitHub App token: PRs made with GITHUB_TOKEN do not start CI. Scoped to this repository (default) and to
-      # Contents + Pull requests write; the App has no other permission.
+      # Contents + Pull requests + Workflows write; the App has no other permission.
       - name: App token
         id: app
         if: steps.creds.outputs.have == 'true'
@@ -137,6 +137,7 @@ jobs:
           private-key: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write # the pins live in workflow files; an App token cannot change them without it
 
       # Commits are made with the contents API as the App: GitHub signs those itself (verified), which ruleset
       # "protect main" requires; `git commit` in the runner would be unsigned. The step checks `verification.verified`.
