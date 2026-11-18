@@ -89,5 +89,6 @@
       "note": "Das Pipeline-Repo selbst; ruft ci.yml lokal auf, kein Pin.",
       "visibility": "public"
     }
-  ]
+  ],
+  "unmanaged_repos": []
 }

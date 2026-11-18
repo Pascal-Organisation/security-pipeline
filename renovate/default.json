@@ -60,6 +60,16 @@
       ]
     },
     {
+      "description": "Major updates arrive once a month, as ONE PR per repo (D-55): the first day of the month before 6am, branch renovate/majors-review. Before, every major got its own branch the day after its 7-day wait, and a major that fails CI on purpose (a runner image, a tool that needs a deliberate migration) was rebased and re-run on every Renovate pass. Now a blocked major costs one CI run a month and is closed or fixed in one place. Not touched: patch, digest, pin and pinDigest (0 days, automerge) and minor (7 days, automerge); vulnerability fixes keep their own immediate schedule (vulnerabilityAlerts above all rules). Own pipeline majors have their own rule below with no schedule.",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "schedule": [
+        "before 6am on the first day of the month"
+      ],
+      "groupName": "majors (review)"
+    },
+    {
       "description": "Our own reusable workflows, rollout ring 'stable': all pins move together once the gate is green; every non-major release (minor, patch, digest, pin, pinDigest) is proposed at once (D-50), overriding the 7-day wait of the general minor rule at the top. Majors have their own rule below.",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
@@ -88,7 +98,7 @@
       "minimumReleaseAge": "0 days"
     },
     {
-      "description": "A major release of our own workflows changes the caller contract: always by hand.",
+      "description": "A major release of our own workflows changes the caller contract: always by hand. Not held back by the monthly schedule of the general major rule (D-55).",
       "matchPackageNames": [
         "Pascal-Organisation/security-pipeline"
       ],
@@ -100,6 +110,9 @@
       "automerge": false,
       "labels": [
         "major-update"
+      ],
+      "schedule": [
+        "at any time"
       ]
     },
     {
@@ -157,7 +170,7 @@
       "enabled": false
     },
     {
-      "description": "GitHub-hosted runner image majors (e.g. ubuntu-24.04 \u2192 ubuntu-26.04) are deliberate, tested changes: the public build path depends on runner specifics.",
+      "description": "GitHub-hosted runner image majors (e.g. ubuntu-24.04 \u2192 ubuntu-26.04) are deliberate, tested changes: the public build path depends on runner specifics. Review by 2027-02-01: move runners deliberately (build path, AppArmor/userns, buildx), then drop this rule. Closed PRs #7 (security-pipeline) and #42 (solar) were the last ubuntu-26.x branches.",
       "matchDatasources": [
         "github-runners"
       ],

@@ -25,12 +25,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # Preferred credential: the fleet-bot App (read-only Administration, fleet/fleet-bot-app.md), used as soon as
+      # the variable FLEET_BOT_APP_ID is set. Until then the PAT FLEET_DRIFT_TOKEN is used; delete it afterwards.
+      - name: App token
+        id: app
+        if: ${{ vars.FLEET_BOT_APP_ID != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_KEY }}
+          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app] the check reads every fleet repo; read-only permissions
+          permission-administration: read
+          permission-organization-administration: read
+          permission-metadata: read
+
       - name: Compare
         env:
-          GH_TOKEN: ${{ secrets.FLEET_DRIFT_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.FLEET_DRIFT_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::secret FLEET_DRIFT_TOKEN is missing - see the operator secret inventory (private)"; exit 2
+            echo "::error::neither the fleet-bot App (variable FLEET_BOT_APP_ID) nor the secret FLEET_DRIFT_TOKEN is set - see fleet/fleet-bot-app.md"; exit 2
           fi
           set -o pipefail
           tools/fleet-drift.sh | tee -a "$GITHUB_STEP_SUMMARY"
