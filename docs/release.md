@@ -1,13 +1,14 @@
 # Releasing the pipeline
 
-| Step | Action |
-|---|---|
-| 1 | Set `VERSION` and `PIPELINE_VERSION` (env in `build-container.yml`) to the same `vX.Y.Z`; PR to `main` |
-| 2 | Merge the PR (commits must be signed) |
-| 3 | Create a signed, annotated tag `vX.Y.Z` on the merge commit: `git tag -s -a vX.Y.Z <sha> -m vX.Y.Z && git push origin vX.Y.Z` |
-| 4 | Create a GitHub Release for the tag, only after step 3: `gh release create vX.Y.Z --verify-tag --generate-notes` (`--verify-tag` aborts if the tag is not on the remote) |
-| 5 | Pin the builder commit in the consumer: in `Pascal-Organisation/homelab` run `Homelab-Skripte/k3s-apps/pin-pipeline-release.sh --repo <clone of this repo>` (verifies the signed tag, regenerates the three ClusterImagePolicies and the updater's identity regexp) and open a PR; the cluster admits images of the new release only after it is merged (D-52) |
-| 6 | Renovate opens bump PRs in the callers: every non-major release of the pipeline (minor, patch, digest, pin) is proposed at once and automerged after green checks, in both rings (D-50); a major release by hand |
+| Step | Who | Action |
+|---|---|---|
+| 1 | automatic or one click | The version bump PR (`VERSION` and `PIPELINE_VERSION`) is opened by `release-pr.yml` (D-53): automatically after a merged toolbox pin (patch), or by hand: `gh workflow run release-pr.yml -f bump=patch` (`minor`, `major`). Auto-merge (squash) is set; it merges when the checks are green |
+| 2 | owner, one command | On the laptop with the signing key: `git switch main && git pull --ff-only && tools/release.sh vX.Y.Z` (YubiKey or passphrase prompt for the signature). The script checks clean up-to-date `main`, `VERSION` = `vX.Y.Z`, tag absent; creates the signed annotated tag, verifies it against `.github/allowed_signers` (as on `origin/main`), checks `git cat-file -t` = `tag`, pushes it and watches the release workflow. `--dry-run` shows the steps without tagging or pushing; `patch` / `minor` instead of a version compute the next one and name the bump PR if main does not carry it yet |
+| 3 | automatic | `release.yml` (on the tag push, GitHub-hosted) re-verifies: annotated, signature against the allowed signers on `main`, commit on `main`, `VERSION` and `PIPELINE_VERSION` equal the tag; only then `gh release create --verify-tag --generate-notes`. Any mismatch fails before a Release exists. Never create the Release by hand |
+| 4 | automatic once the dispatch App exists, else by hand | Pin the builder commit in the consumer: the final job of `release.yml` sends `repository_dispatch` `pipeline-release` (payload `tag`) to `Pascal-Organisation/homelab`; until the App exists run `Homelab-Skripte/k3s-apps/pin-pipeline-release.sh --repo <clone of this repo>` in homelab and open a PR (verifies the signed tag, regenerates the three ClusterImagePolicies and the updater's identity regexp). The cluster admits images of the new release only after that PR is merged (D-52) |
+| 5 | automatic | Renovate opens bump PRs in the callers: every non-major release of the pipeline (minor, patch, digest, pin) is proposed at once and automerged after green checks, in both rings (D-50); a major release by hand |
+
+Owner steps per release: none before the tag when the bump PR merged by itself, then `tools/release.sh vX.Y.Z`. The signature stays a human act on purpose: the trust root is the owner's signing key (D-45); keyless signing by the workflow was considered and rejected (D-53), because it would move the trust root to the workflow identity.
 
 - Order matters: creating a Release for a tag that does not exist yet makes GitHub create an unsigned lightweight tag, and the tag ruleset then makes that tag permanent. This happened with v3.3.0 (D-44). Check before announcing a release: `git fetch --tags && git cat-file -t vX.Y.Z` must print `tag`, and `git tag -v vX.Y.Z` must verify.
 - Tag state: v3.3.0, v3.4.0 and v3.4.1 are unsigned lightweight tags; v3.4.2 (2026-11-17) is the first signed annotated tag since v3.2.0. The signing key is the owner's laptop software key (`~/.ssh/id_ed25519_2026`, ED25519, `SHA256:TYGteEU1VyYgCcHNI1UG/PGHh6hA68pJY4JX8JGjJNw`), which is also his GitHub auth key; it moves to a hardware key with homelab roadmap 2.7. GitHub also still lists an older signing and auth key ("spielwiese") that the owner has to review.
@@ -19,7 +20,7 @@
 
 ## Toolbox pin automation
 
-Job `pin` in `toolbox.yml` (D-49) keeps the `TOOLBOX` pins (`ci.yml`, `build-container.yml`) on the newest signed toolbox. After `build` has pushed and signed on `main`, it verifies signature and SBOM attestation, commits the new digest to `bot/toolbox-pin` (contents API as a GitHub App, so the commit is signed and verified), opens or updates the PR and sets auto-merge (squash); required checks and the ruleset still apply and the PR's CI already runs on the new digest. No change, no PR; missing secrets, only a warning. A merged bump is followed by a patch release by the owner (steps above; the PR body has the commands); tags are never created by the job.
+Job `pin` in `toolbox.yml` (D-49) keeps the `TOOLBOX` pins (`ci.yml`, `build-container.yml`) on the newest signed toolbox. After `build` has pushed and signed on `main`, it verifies signature and SBOM attestation, commits the new digest to `bot/toolbox-pin` (contents API as a GitHub App, so the commit is signed and verified), opens or updates the PR and sets auto-merge (squash); required checks and the ruleset still apply and the PR's CI already runs on the new digest. No change, no PR; missing secrets, only a warning. A merged bump is followed by a patch bump PR from `release-pr.yml` (D-53) and then the owner's `tools/release.sh`; tags are never created by a job.
 
 Owner setup, once:
 
@@ -30,3 +31,15 @@ Owner setup, once:
 5. Run `ci-toolbox` once via workflow_dispatch on `main` to test; a PR `bot/toolbox-pin` appears if the pin is behind.
 
 Known limit: with "require branches up to date" a bump PR that falls behind `main` waits until the next toolbox run recreates it or someone updates the branch.
+
+## Release automation (D-53)
+
+Workflows: `release-pr.yml` (version bump PR) and `release.yml` (verify tag, create Release, notify homelab). Both run on GitHub-hosted runners, `permissions: {}` at the top, only `release.yml` job `release` has `contents: write`, all actions pinned by SHA.
+
+Owner setup, once:
+
+1. The bump PR reuses the toolbox-pin App and its secrets (setup above). Nothing more: its commits are made with the contents API, GitHub signs them, so the rulesets `signed commits on every branch` and `protect main` accept them; the branch `bot/release-vX.Y.Z` is new each time, so it needs no force-push exclusion in `no force-push on branches`.
+2. Optional, for the homelab pin dispatch: create a second GitHub App `security-pipeline release-dispatch` (Webhook off). Repository permissions: **Contents: Read and write** (GitHub requires `contents: write` on the target repository for `POST /repos/{owner}/{repo}/dispatches`), Metadata Read, nothing else. Install on Only select repositories: `homelab`. Generate a private key; in `security-pipeline` set the repository variable `HOMELAB_DISPATCH_APP_ID` and the secrets `HOMELAB_DISPATCH_APP_ID` and `HOMELAB_DISPATCH_APP_KEY`. Until the variable exists the job is skipped. In homelab a workflow on `repository_dispatch` type `pipeline-release` has to run the pin script and open the PR (not part of this repository). Trade-off: this App can write contents of homelab (push branches; `main` is protected by its ruleset).
+3. `.github/allowed_signers` holds the owner's public signing key (`SHA256:TYGteEU1VyYgCcHNI1UG/PGHh6hA68pJY4JX8JGjJNw`); changing the signing key (hardware key, roadmap 2.7) means a reviewed PR that adds the new key before the first tag with it. The workflow and `tools/release.sh` read this file from `main`, not from the tagged commit.
+
+Known limits: `release.yml` cannot fix a bad tag, and a published Release is immutable: check `tools/release.sh --dry-run` output first when in doubt. The automatic patch bump PR fires on the merge commit title `toolbox pin:`; a bump already open or a `VERSION` that is not yet tagged suppresses it.
