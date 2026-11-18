@@ -1,9 +1,11 @@
 name: fleet-register
 
 # Nightly: organisation repos (not archived, not forks) that fleet/repos.json does not list are proposed in ONE PR
-# (branch bot/fleet-register, stub entries marked "todo"). Commits go through the contents API as the fleet-bot App,
-# so GitHub signs them and no ruleset exclusion is needed (fleet/fleet-bot-app.md). Never merged by the bot.
-# Inert until the owner has created the fleet-bot App and set the variable FLEET_BOT_APP_ID (D-55).
+# (branch bot/fleet-register, stub entries marked "todo"). Listing uses the fleet-bot App (Metadata read only); branch,
+# commit and PR use the existing toolbox-pin App (Contents + Pull requests write on this repository only), so
+# fleet-bot holds no code-write permission. Commits go through the contents API, GitHub signs them, no ruleset
+# exclusion is needed (fleet/fleet-bot-app.md). Never merged by the bot.
+# Inert until the variable FLEET_BOT_APP_ID is set AND the secrets TOOLBOX_PIN_APP_ID / TOOLBOX_PIN_APP_KEY exist (D-55).
 on:
   schedule:
     - cron: "41 2 * * *"
@@ -29,9 +31,20 @@ jobs:
     permissions: {}
     steps:
       # No checkout: the script reads fleet/repos.json through the API and the job runs no repository code.
-      # Token 1 lists the organisation's repositories (installation-wide, Metadata read).
+      # Secrets cannot be tested in a job-level if, so the toolbox-pin credentials are checked here.
+      - name: Check toolbox-pin App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.TOOLBOX_PIN_APP_ID }}
+          APP_KEY: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then echo "have=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::TOOLBOX_PIN_APP_ID / TOOLBOX_PIN_APP_KEY are not set: fleet-register skipped (docs/release.md, Toolbox pin automation)"; fi
+
+      # Token 1 (fleet-bot) lists the organisation's repositories: Metadata read, installation-wide.
       - name: App token (list)
         id: list
+        if: steps.creds.outputs.have == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.FLEET_BOT_APP_ID }}
@@ -39,19 +52,20 @@ jobs:
           owner: ${{ github.repository_owner }} # zizmor: ignore[github-app] Metadata read lists every repository of the organisation
           permission-metadata: read
 
-      # Token 2 writes, to this repository only: Contents + Pull requests write.
+      # Token 2 (toolbox-pin App) writes, to this repository only: Contents + Pull requests write, no Workflows.
       - name: App token (write)
         id: write
+        if: steps.creds.outputs.have == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.FLEET_BOT_APP_ID }}
-          private-key: ${{ secrets.FLEET_BOT_APP_KEY }}
-          owner: ${{ github.repository_owner }}
+          app-id: ${{ secrets.TOOLBOX_PIN_APP_ID }}
+          private-key: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
 
       - name: Fetch the script from main
+        if: steps.creds.outputs.have == 'true'
         env:
           GH_TOKEN: ${{ steps.write.outputs.token }}
           REPO: ${{ github.repository }}
@@ -59,6 +73,7 @@ jobs:
           gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/fleet/register.sh?ref=main" > "$RUNNER_TEMP/register.sh"
 
       - name: Register
+        if: steps.creds.outputs.have == 'true'
         env:
           GH_TOKEN: ${{ steps.write.outputs.token }}
           GH_TOKEN_LIST: ${{ steps.list.outputs.token }}

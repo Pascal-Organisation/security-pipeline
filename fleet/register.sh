@@ -7,8 +7,8 @@
 # GitHub signs those commits itself ("verified"), so the ruleset "signed commits on every branch" needs no exclusion.
 # The branch is only ever fast-forwarded by new commits, never force-pushed, so "no force-push" needs none either.
 #
-#   LIST_TOKEN   token that sees all org repos (metadata: read)        -> env GH_TOKEN_LIST
-#   GH_TOKEN     token with contents + pull requests write on $REPO    -> env GH_TOKEN
+#   GH_TOKEN_LIST  token that sees all org repos (fleet-bot, Metadata read)
+#   GH_TOKEN       token with contents + pull requests write on $REPO (toolbox-pin App, this repo only)
 #   DRY_RUN=1    print the missing repos and the resulting file, change nothing
 #   REPO         repository holding fleet/repos.json (default Pascal-Organisation/security-pipeline)
 set -euo pipefail
