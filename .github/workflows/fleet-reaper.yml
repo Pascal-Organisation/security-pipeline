@@ -1,0 +1,74 @@
+name: fleet-reaper
+
+# Every 6 hours: cancel zombie runs (queued, in_progress or waiting for more than 24 h) in every repo of
+# fleet/repos.json. Normal cancel first, force-cancel for runs the API will not cancel (never got a runner).
+# Inert until the owner has created the fleet-bot App and set the variable FLEET_BOT_APP_ID (fleet/fleet-bot-app.md, D-55).
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List the runs only, cancel nothing"
+        type: boolean
+        default: false
+      max_age_hours:
+        description: "Age limit in hours (default 24, or the repository variable FLEET_REAPER_MAX_AGE_HOURS)"
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: fleet-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    name: Cancel zombie runs
+    if: ${{ vars.FLEET_BOT_APP_ID != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installation token for every repository the App is installed on, Actions write + Metadata read only.
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_KEY }}
+          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app] Actions write is needed on every fleet repo, new ones included
+          permission-actions: write
+          permission-metadata: read
+
+      - name: Cancel
+        id: reap
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          MAX_AGE_HOURS: ${{ inputs.max_age_hours || vars.FLEET_REAPER_MAX_AGE_HOURS || '24' }}
+          SELF_REPO: ${{ github.event.repository.name }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -o pipefail
+          fleet/reaper.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify (ntfy)
+        if: ${{ always() && steps.reap.outputs.cancelled != '' && (steps.reap.outputs.cancelled != '0' || steps.reap.outputs.failed != '0') && !inputs.dry_run }}
+        env:
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+          CANCELLED: ${{ steps.reap.outputs.cancelled }}
+          FAILED: ${{ steps.reap.outputs.failed }}
+        run: |
+          if [ -n "$NTFY_URL" ]; then
+            curl -fsS --max-time 10 -H "Title: fleet-reaper: $CANCELLED zombie run(s) cancelled, $FAILED not cancellable" -H "Tags: broom" \
+              -d "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$NTFY_URL" > /dev/null || echo "::warning::ntfy failed"
+          else
+            echo "::warning::NTFY_URL secret not set, no notification sent"
+          fi
