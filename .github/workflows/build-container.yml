@@ -214,7 +214,7 @@ jobs:
             # discarded after the job; the output is the same kind of OCI tar, so scan, SBOM, push and digest
             # check below are unchanged. No cache: fresh builder per job, --no-cache, --pull.
             docker buildx create --name "pipeline-$GITHUB_RUN_ID" --driver docker-container --use \
-              --driver-opt "image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe" >/dev/null
+              --driver-opt "image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb" >/dev/null
             target=(); [ -n "$TARGET" ] && target=(--target "$TARGET")
             # --provenance/--sbom=false: one plain image manifest in index.json, like bk (provenance and SBOM are
             # produced and signed by this workflow, not by BuildKit).
