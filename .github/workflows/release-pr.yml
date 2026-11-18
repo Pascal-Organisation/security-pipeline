@@ -1,0 +1,112 @@
+## Version bump PR (D-53). Replaces the hand edit of VERSION and PIPELINE_VERSION. Manual (input patch|minor|major) or
+## automatic after a merged toolbox pin (D-49): a patch bump. Commits go through the contents API as the toolbox-pin App,
+## so GitHub signs them (ruleset: signatures required) and CI starts on the PR; auto-merge (squash) is set. The release
+## itself stays the owner's signed tag (tools/release.sh). GitHub-hosted only; the job checks out no repo code.
+name: release-pr
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to raise
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+  push:
+    branches: [main]
+    paths: [.github/workflows/ci.yml, .github/workflows/build-container.yml]
+
+permissions: {}
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Open version bump PR
+    # A push only counts when it is a merged toolbox pin (PR title "toolbox pin: ..."); everything else is manual.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'toolbox pin:')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      REPO: ${{ github.repository }}
+      BUMP: ${{ inputs.bump || 'patch' }}
+    steps:
+      - name: Check App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.TOOLBOX_PIN_APP_ID }}
+          APP_KEY: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then echo "have=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::TOOLBOX_PIN_APP_ID / TOOLBOX_PIN_APP_KEY are not set: no bump PR (docs/release.md)"; fi
+
+      - name: App token
+        id: app
+        if: steps.creds.outputs.have == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TOOLBOX_PIN_APP_ID }}
+          private-key: ${{ secrets.TOOLBOX_PIN_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write # build-container.yml carries PIPELINE_VERSION
+
+      - name: Bump VERSION and PIPELINE_VERSION, open PR
+        if: steps.creds.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          raw() { gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/$1?ref=main"; }
+          cur="$(raw VERSION | tr -d '[:space:]')"
+          [[ "$cur" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || { echo "::error::VERSION is not vX.Y.Z: $cur"; exit 1; }
+          maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"; pat="${BASH_REMATCH[3]}"
+          case "$BUMP" in
+            patch) next="v$maj.$min.$((pat + 1))" ;;
+            minor) next="v$maj.$((min + 1)).0" ;;
+            major) next="v$((maj + 1)).0.0" ;;
+            *) echo "::error::bad bump $BUMP"; exit 1 ;;
+          esac
+          # Only bump from a released state: VERSION on main must already be a tag, else a bump PR is already merged.
+          if [ -z "$(gh api "repos/$REPO/git/matching-refs/tags/$cur" --jq '.[] | select(.ref == "refs/tags/'"$cur"'") | .ref')" ]; then
+            echo "VERSION $cur on main is not released yet: nothing to bump (run tools/release.sh $cur)." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          branch="bot/release-$next"
+          if gh api "repos/$REPO/git/ref/heads/$branch" >/dev/null 2>&1 || [ -n "$(gh pr list -R "$REPO" --state open --search "release $next in:title" --json number --jq '.[0].number // empty')" ]; then
+            echo "A bump to $next is already open: nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          main_sha="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
+          gh api -X POST "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$main_sha" >/dev/null
+          put() { # path, new content (stdin), message
+            local blob last
+            blob="$(gh api "repos/$REPO/contents/$1?ref=main" --jq .sha)"
+            last="$(gh api -X PUT "repos/$REPO/contents/$1" -f message="$2" -f content="$(base64 -w0)" -f sha="$blob" -f branch="$branch" --jq .commit.sha)"
+            [ "$(gh api "repos/$REPO/commits/$last" --jq .commit.verification.verified)" = true ] \
+              || { echo "::error::commit $last is not verified; the signed-commit ruleset would reject it"; exit 1; }
+          }
+          msg="release $next: VERSION and PIPELINE_VERSION"
+          printf '%s\n' "$next" | put VERSION "$msg"
+          # exactly one PIPELINE_VERSION line is replaced, anything else is an error
+          line="  PIPELINE_VERSION: $cur"
+          [ "$(raw .github/workflows/build-container.yml | grep -cxF "$line")" = 1 ] || { echo "::error::expected exactly one '$line' in build-container.yml"; exit 1; }
+          raw .github/workflows/build-container.yml | while IFS= read -r l || [ -n "$l" ]; do
+            if [ "$l" = "$line" ]; then l="  PIPELINE_VERSION: $next"; fi
+            printf '%s\n' "$l"
+          done | put .github/workflows/build-container.yml "$msg"
+          {
+            echo "Raises \`VERSION\` and \`PIPELINE_VERSION\` from \`$cur\` to \`$next\` ($BUMP), D-53. Nothing else changes."
+            echo
+            echo "Auto-merge (squash) is set and waits for the required checks. After the merge, the owner releases with one command on the laptop (signing key):"
+            echo
+            echo '```bash'
+            echo "git switch main && git pull --ff-only && tools/release.sh $next"
+            echo '```'
+            echo
+            echo "The workflow \`release.yml\` then verifies the signed tag and creates the Release. Rollback before the tag: close this PR."
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create -R "$REPO" --base main --head "$branch" --title "release $next" --body-file "$RUNNER_TEMP/body.md"
+          gh pr merge "$branch" -R "$REPO" --auto --squash
+          echo "Bump PR $cur -> $next (auto-merge set)" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,89 @@
+## Release (D-53). Triggered by the owner's signed annotated tag `vX.Y.Z` (tools/release.sh). The workflow does not
+## sign anything: the trust root stays the owner's signing key on the laptop (D-45). It re-checks the tag exactly as
+## the cluster's pin script does and only then creates the GitHub Release (immutable: it cannot be corrected later).
+## GitHub-hosted runners only (public repo). Any mismatch fails closed, before a Release exists.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Verify tag, create Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # gh release create (the only job with a write permission)
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Tag is signed, annotated and on main
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$TAG is not vX.Y.Z"; exit 1; }
+          [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag (D-44)"; exit 1; }
+          git fetch --quiet origin main:refs/remotes/origin/main
+          # Trust anchor: the signer list as it is on main, never the one inside the tagged commit.
+          git show origin/main:.github/allowed_signers > "$RUNNER_TEMP/allowed_signers"
+          git -c "gpg.ssh.allowedSignersFile=$RUNNER_TEMP/allowed_signers" tag -v "$TAG"
+          commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          git merge-base --is-ancestor "$commit" origin/main || { echo "::error::tagged commit $commit is not on main"; exit 1; }
+          v="$(git show "$commit:VERSION" | tr -d '[:space:]')"
+          [ "$v" = "$TAG" ] || { echo "::error::VERSION at the tagged commit is $v, tag is $TAG"; exit 1; }
+          git show "$commit:.github/workflows/build-container.yml" | grep -qxF "  PIPELINE_VERSION: $TAG" \
+            || { echo "::error::PIPELINE_VERSION in build-container.yml differs from $TAG"; exit 1; }
+          echo "Verified $TAG -> $commit (signed, annotated, on main, versions agree)"
+
+      - name: Create Release
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then echo "::error::release $TAG exists"; exit 1; fi
+          gh release create "$TAG" -R "$REPO" --verify-tag --title "$TAG" --generate-notes
+          echo "### Release $TAG: $GITHUB_SERVER_URL/$REPO/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+
+  # Inert until the owner creates the dispatch App and sets the variable HOMELAB_DISPATCH_APP_ID and the secrets
+  # HOMELAB_DISPATCH_APP_ID / HOMELAB_DISPATCH_APP_KEY (docs/release.md). Without it, run the pin step by hand.
+  dispatch-pin:
+    name: Notify homelab (pin PR)
+    needs: release
+    if: vars.HOMELAB_DISPATCH_APP_ID != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      # Scoped to the one target repository; repository_dispatch needs Contents: write there (GitHub REST docs).
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.HOMELAB_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.HOMELAB_DISPATCH_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homelab
+          permission-contents: write
+
+      - name: Dispatch pipeline-release
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/$OWNER/homelab/dispatches" -f event_type=pipeline-release -f "client_payload[tag]=$TAG"
+          echo "Dispatched pipeline-release $TAG to $OWNER/homelab" >> "$GITHUB_STEP_SUMMARY"
