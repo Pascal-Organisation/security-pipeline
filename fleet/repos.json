@@ -88,6 +88,15 @@
       "gate_check": "ci / security-gate",
       "note": "Das Pipeline-Repo selbst; ruft ci.yml lokal auf, kein Pin.",
       "visibility": "public"
+    },
+    {
+      "name": "app-template",
+      "profile": "ci-only",
+      "ring": "stable",
+      "gate_check": "Security / security-gate",
+      "visibility": "private",
+      "todo": true,
+      "note": "TODO owner: auto-registered by fleet-register on 2026-11-19; confirm profile, ring, gate_check and visibility, then delete the todo and note keys (or list the repo in unmanaged_repos)."
     }
   ],
   "unmanaged_repos": []
