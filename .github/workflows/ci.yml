@@ -113,6 +113,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -170,6 +176,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -337,6 +349,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -472,6 +490,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -508,6 +532,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -536,6 +566,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -558,6 +594,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -585,6 +627,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -616,6 +664,12 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - name: Every capability passed (skipped only where not applicable)
         env:
           RESULTS: ${{ toJSON(needs) }}

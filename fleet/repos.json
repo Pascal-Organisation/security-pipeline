@@ -11,7 +11,8 @@
       "patterns_allowed": [
         "Pascal-Organisation/*",
         "sigstore/cosign-installer@*",
-        "ossf/scorecard-action@*"
+        "ossf/scorecard-action@*",
+        "step-security/harden-runner@*"
       ]
     }
   },
