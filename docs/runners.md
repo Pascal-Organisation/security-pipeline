@@ -50,4 +50,4 @@ page states only the contract the workflows rely on.
 |---|---|---|
 | ARC (gha-runner-scale-set) | 0.15.1 | infrastructure repository |
 | Runner base | `actions-runner:2.338.2` | `toolbox/Dockerfile` |
-| BuildKit | `v0.34.2` (rootless in toolbox) | `toolbox/Dockerfile` |
+| BuildKit | `v0.35.1` (rootless in toolbox) | `toolbox/Dockerfile` |
