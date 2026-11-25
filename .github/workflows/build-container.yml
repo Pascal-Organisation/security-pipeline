@@ -101,7 +101,9 @@ jobs:
   # A direct push still lands in git on GitHub Free; it just never gets signed.
   policy:
     name: Release policy
-    runs-on: ubuntu-24.04
+    # Same payload rule as ci.yml `visibility` (D-57): only a literal true selects the cluster. Read-only token, no secrets,
+    # no signing identity; `publish` and `sign` stay GitHub-hosted (D-2).
+    runs-on: ${{ github.event.repository.private == true && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read      # the commit and its verification
