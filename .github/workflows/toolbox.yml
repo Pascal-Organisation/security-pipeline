@@ -43,7 +43,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
 
       - name: Build
         run: |
@@ -98,7 +98,7 @@ jobs:
       IDENTITY_RE: '^https://github\.com/Pascal-Organisation/security-pipeline/\.github/workflows/toolbox\.yml@refs/heads/main$'
       ISSUER: https://token.actions.githubusercontent.com
     steps:
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
 
       # Gate: the digest is only written to git if signature and SBOM attestation verify against the signer identity.
       - name: Verify signature and attestation
