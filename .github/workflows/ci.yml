@@ -89,6 +89,7 @@ jobs:
     outputs:
       private: ${{ steps.read.outputs.private }}
     steps:
+      - id: read
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAYLOAD_PRIVATE: ${{ github.event.repository.private }}
@@ -264,6 +265,7 @@ jobs:
       actions: read # CodeQL needs workflow run metadata
       security-events: write # upload CodeQL results
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -449,6 +451,7 @@ jobs:
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
       security-events: write # upload SARIF to code scanning
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - *toolbox
