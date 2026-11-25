@@ -1,6 +1,6 @@
 # Target architecture (architectural goal)
 
-Status: **binding goal**, adopted 2026-11-09 (D-40), restated 2026-11-13 (D-45). Owner: @pascal05. The infrastructure goal (IDs `H-*`) lives in
+Status: **binding goal**, adopted 2026-11-09 (D-40), restated 2026-11-13 (D-45), extended 2026-11-25 (D-56: G-C8, G-V6, G-D5). Owner: @pascal05. The infrastructure goal (IDs `H-*`) lives in
 the operator's private infrastructure repository.
 
 A PR that moves away from a goal needs a decision in [decisions.md](decisions.md) naming the goal ID. Current state
@@ -69,7 +69,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-S5 | Fork PRs from external contributors need approval before CI | repo Actions settings | Done |
 | G-S6 | Push protection on public repos; TruffleHog on every push/PR, full history weekly; a finding that cannot leave history is accepted only through a `secret-scan` exception (exact detector, file and commit, owner, at most 90 days, never verified, D-48) | settings, `ci.yml` | Done (exceptions: with the release after D-48) |
 | G-S7 | `SECURITY.md` and private vulnerability reporting | repo settings | Done |
-| G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (D-55: the check takes the `fleet-bot` App token when `FLEET_BOT_APP_ID` is set, else the PAT; the same App runs `fleet-reaper.yml` (cancels runs stuck for 24 h) and `fleet-register.yml` (PR for repos missing from the manifest, written by the toolbox-pin App), inert until the owner creates it, [fleet/fleet-bot-app.md](../fleet/fleet-bot-app.md); workflow and script exist; it has never run: the secret `FLEET_DRIFT_TOKEN` is not set and the first schedule is 2026-11-16; run locally on 2026-11-11 the script reports 6 differences, see G-C5) |
+| G-S8 | Weekly drift check of org/repo settings against `fleet/repos.json`, alert on drift | `fleet-drift.yml` runs | Partial (D-55: the check takes the `fleet-bot` App token when `FLEET_BOT_APP_ID` is set, else the PAT; the same App runs `fleet-reaper.yml` (cancels runs stuck for 24 h) and `fleet-register.yml` (PR for repos missing from the manifest, written by the toolbox-pin App), [fleet/fleet-bot-app.md](../fleet/fleet-bot-app.md). 2026-11-25: the App exists and the weekly scheduled run of 2026-11-23 succeeded, as did the dispatch runs of 2026-11-17 and 2026-11-18. Open: drift raises no push notification, because the secret `NTFY_URL` is not set) |
 | G-S9 | Organisation requires 2FA | org settings | Partial (the sole member has 2FA; the organisation requirement setting reads disabled on 2026-11-11) |
 | G-S10 | Rulesets cover every branch of this repository (signed commits, no force-push), so no unreviewed commit can become a builder identity | `gh api repos/<r>/rulesets` | Partial (D-51: `tools/fleet-rulesets.sh` defines signatures on every branch and no force-push except `renovate/**` and `bot/toolbox-pin`; applied live 2026-11-17 (both rulesets active). Partial because "Changes under `.github/` only by PR" cannot be enforced on non-default branches on this plan: push rulesets are private/internal only, required reviewers needs teams) |
 | G-S11 | GitHub Apps installed on the organisation have access to selected repositories only and hold no write permission they do not use | `gh api orgs/<org>/installations` | Planned (two apps hold contents and workflows write on all repositories, 2026-11-13) |
@@ -85,6 +85,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 | G-C5 | Every workflow starts with `permissions: {}`; org token read-only; Actions cannot approve PRs | zizmor, org settings | Partial (workflows: Done; org settings: on 2026-11-11 the default workflow token is `write` and Actions may approve PRs, against the declared `read` / `false` in `fleet/repos.json`; every workflow still declares `permissions: {}`) |
 | G-C6 | No `pull_request_target`/`workflow_run` with untrusted checkout; `persist-credentials: false`; `timeout-minutes` everywhere; no expression injection | zizmor | Done |
 | G-C7 | No caches shared across runs or trust domains; fresh BuildKit state per build | workflow review | Done |
+| G-C8 | Egress of GitHub-hosted jobs is recorded, then limited to an allow-list (StepSecurity Harden-Runner, `audit` first, `block` after a clean week); first the `ci.yml` and `publish` jobs of public repositories. The **sign job stays free of third-party actions** unless a decision says otherwise, because it holds the OIDC signing token | workflow review; Harden-Runner insights per run | Planned (D-56; the free tier covers public repositories only, so private callers' hosted jobs are `Future (cost)`) |
 
 ### 4.3 Build and gates
 
@@ -131,6 +132,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 | G-D2 | Item 2 (builder.id, event) and item 4 enforced | ClusterImagePolicies | Done (app cluster, 2026-11-09) |
 | G-D3 | Pull-based deploys; CI never holds runtime credentials | updater design | Done |
 | G-D4 | Runtime manifests reconciled from git (GitOps) | live state vs git | Partial (a GitOps controller reconciles every app-cluster unit from `main` since 2026-11-11; commits are not signature-verified and pruning is off, so the stretch goal of signed GitOps is open) |
+| G-D5 | Transparency-log monitor: a scheduled search of Rekor (`rekor-monitor`) for certificates issued to the `build-container.yml` identity, compared with the signed releases and their image digests; an unknown entry alerts | monitor run history | Planned (D-56; the consumer's row for it is in the operator's roadmap) |
 
 ### 4.6 Vulnerability and exception management
 
@@ -141,6 +143,7 @@ A runtime may run an own image only if **all** of these hold; otherwise it refus
 | G-V3 | Not-affected findings as OpenVEX, applied to all scans | `.security/vex.openvex.json` | Done (v3.1.0) |
 | G-V4 | Running images re-scanned weekly | in-cluster job | Done (weekly CronJob in the app cluster since 2026-11-09; first scheduled run 2026-11-15) |
 | G-V5 | Findings carry KEV and EPSS, and the fix order follows them (all fixes are applied immediately, G-V1; KEV/EPSS decide what is looked at first) | scan summary, Dependency-Track | Planned |
+| G-V6 | A second, independent scanner (Grype) runs next to Trivy on the weekly re-scan of running images; a fixable finding that only one scanner reports is listed with its source. Trivy stays the gate | re-scan metrics per scanner | Planned (D-56; Trivy is the only scanner, so a scanner bug or a compromised scanner release goes unnoticed) |
 
 ### 4.7 Release and operations
 
@@ -178,7 +181,7 @@ Status as of v3.4.2 (see `VERSION`, [decisions.md](decisions.md), tags v3.0.2 to
 |---|---|---|
 | **L1 Baseline** | Signed images, SBOM, fail-closed admission, pinned actions, gates | Reached (v3.0.x, 2026-11-04) |
 | **L2 Hardened** | Nothing unreviewed can sign or be admitted: G-S1 to G-S11, G-C1 to G-C7, G-B1 to G-B3, G-B5, G-A1 to G-A5, G-D1 to G-D3, G-V1 to G-V3, G-R1, G-R3, G-R4 | Not yet reached. Open: G-S3, G-S8, G-S9, G-S10, G-S11, G-C5 |
-| **L3 Verified** | Evidence beyond prevention: SLSA Build L2 for public repos (G-A8), code scanning gate (G-B6), exceptions with owner and 90 days (G-V2), KEV/EPSS (G-V5), fresh toolbox and fleet (G-R2, G-R5, G-R6), signed GitOps (G-D4), Scorecard KPI; stretch: G-A6, G-A7 | Done: licence gate (D-42), weekly runtime re-scan (G-V4). Open: the rest |
+| **L3 Verified** | Evidence beyond prevention: SLSA Build L2 for public repos (G-A8), code scanning gate (G-B6), second scanner (G-V6), Rekor identity monitor (G-D5), egress audit of hosted jobs (G-C8), exceptions with owner and 90 days (G-V2), KEV/EPSS (G-V5), fresh toolbox and fleet (G-R2, G-R5, G-R6), signed GitOps (G-D4), Scorecard KPI; stretch: G-A6, G-A7 | Done: licence gate (D-42), weekly runtime re-scan (G-V4). Open: the rest |
 
 ## 8. KPIs
 
