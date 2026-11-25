@@ -93,7 +93,7 @@ permissions: {}
 env:
   # Version of this pipeline; ends up in the provenance's builder.id. self-check keeps it
   # equal to the VERSION file and the release tag.
-  PIPELINE_VERSION: v3.4.4
+  PIPELINE_VERSION: v3.4.5
   # same pin as in ci.yml (Renovate moves both)
   TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:7375c07bdae692a83aa51015afa561e43eaa6cea5969f83f8855f9833e24c30e
 
