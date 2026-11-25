@@ -271,6 +271,12 @@ jobs:
       image: ${{ steps.push.outputs.image }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.gate.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - name: Only main
         run: |
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::build-container runs only on refs/heads/main (got $GITHUB_REF)"; exit 1; }
