@@ -78,7 +78,7 @@ Status: **Done**, **Merged** (on `main`, ships next release), **Partial**, **Pla
 
 | ID | Goal | Verify | Status |
 |---|---|---|---|
-| G-C1 | Public repos build only on GitHub-hosted runners; `ci.yml` refuses self-hosted for them | `ci.yml` visibility gate; runner groups | Done |
+| G-C1 | Public repos build only on GitHub-hosted runners; `ci.yml` refuses self-hosted for them | `ci.yml` visibility gate (API check; payload-routed `visibility`/`security-gate` fail on mismatch, D-57); runner groups | Done |
 | G-C2 | Private repos build on ephemeral single-job runners; one scale set and namespace per trust domain | ARC config, runner group repo lists | Done (namespace and scale set per trust domain, 2026-11-09) |
 | G-C3 | Runner pods: no Docker daemon, privileged mode or host mounts; user namespaces; rootless builds | runner pod spec | Done (rootless BuildKit: the default scale set uses Localhost AppArmor and seccomp profiles, the others stay unconfined, section 6) |
 | G-C4 | Runner network default-deny; egress only DNS + public 443/80 | NetworkPolicy, probe matrix | Done (probe matrix OK 2026-11-09) |

@@ -12,7 +12,7 @@ page states only the contract the workflows rely on.
 ## Rules
 
 - Public repositories never run on self-hosted runners: the runner groups with runners use `visibility=selected` and
-  `allows_public_repositories=false` (the built-in Default group has no runners), and `ci.yml` routes by the API-reported visibility (fail closed).
+  `allows_public_repositories=false` (the built-in Default group has no runners), and `ci.yml` routes by the API-reported visibility (fail closed). Only `visibility` and `security-gate` route by the event payload (`github.event.repository.private == true`, anything else is GitHub-hosted); `visibility` fails if the API disagrees (D-57).
 - Signing never runs on self-hosted runners.
 - No deploy runner for images: the runtime pulls signed images. `deploy-static.yml` defaults to
   `["self-hosted","deploy"]` and is for private repositories only; set `deploy-runner` for a GitHub-hosted FTPS upload.
