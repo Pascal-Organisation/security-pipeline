@@ -271,6 +271,7 @@ jobs:
       image: ${{ steps.push.outputs.image }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
+      - name: Only main
         run: |
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::build-container runs only on refs/heads/main (got $GITHUB_REF)"; exit 1; }
 
