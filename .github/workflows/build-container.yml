@@ -470,7 +470,7 @@ jobs:
         with:
           name: attestations
 
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
 
       # SLSA v1 provenance, generated HERE from values the build job cannot influence: the claims of this
       # job's own OIDC token (issued by GitHub, bound to repository, ref, sha, run and to the reusable workflow
