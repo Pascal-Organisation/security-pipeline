@@ -12,8 +12,9 @@ page states only the contract the workflows rely on.
 ## Rules
 
 - Public repositories never run on self-hosted runners: the runner groups with runners use `visibility=selected` and
-  `allows_public_repositories=false` (the built-in Default group has no runners), and `ci.yml` routes by the API-reported visibility (fail closed).
+  `allows_public_repositories=false` (the built-in Default group has no runners), and `ci.yml` routes by the API-reported visibility (fail closed). Only `visibility` and `security-gate` route by the event payload (`github.event.repository.private == true`, anything else is GitHub-hosted); `visibility` fails if the API disagrees (D-57).
 - Signing never runs on self-hosted runners.
+- GitHub-hosted `ci.yml` jobs of public callers (after `visibility`) record their egress with StepSecurity Harden-Runner in `audit` mode (G-C8, D-58); it sends network and process events of those jobs to StepSecurity (public repositories only, free tier). `publish`, `sign` and every job with a write or OIDC token run no third-party action.
 - No deploy runner for images: the runtime pulls signed images. `deploy-static.yml` defaults to
   `["self-hosted","deploy"]` and is for private repositories only; set `deploy-runner` for a GitHub-hosted FTPS upload.
 - A repository never runs on a scale set of another trust domain.
@@ -49,4 +50,4 @@ page states only the contract the workflows rely on.
 |---|---|---|
 | ARC (gha-runner-scale-set) | 0.15.1 | infrastructure repository |
 | Runner base | `actions-runner:2.338.2` | `toolbox/Dockerfile` |
-| BuildKit | `v0.34.2` (rootless in toolbox) | `toolbox/Dockerfile` |
+| BuildKit | `v0.35.1` (rootless in toolbox) | `toolbox/Dockerfile` |

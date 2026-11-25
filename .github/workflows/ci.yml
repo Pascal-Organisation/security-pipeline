@@ -2,9 +2,15 @@
 ## and on push. Nothing here builds a release or touches a host.
 ##
 ## Visibility is never taken from an input: the first job asks the API about the repository
-## the run belongs to, and fails closed. (github.event.repository is not relied on, because
-## it depends on the event's payload.) A public repo therefore ALWAYS runs on
-## GitHub-hosted runners — fork PRs can never reach the self-hosted CI cluster.
+## the run belongs to, and fails closed. Every later job routes by that API answer. A public
+## repo therefore ALWAYS runs on GitHub-hosted runners — fork PRs can never reach the
+## self-hosted CI cluster.
+## The two jobs that cannot wait for the API answer (`visibility` itself and `security-gate`,
+## which must run even when `visibility` failed) pick their runner from the caller's event
+## payload, `github.event.repository.private == true` (D-57): it describes the BASE repository,
+## is set by GitHub, and anything but a literal true (missing, null, false) means
+## GitHub-hosted. `visibility` then compares the payload with the API and fails on a mismatch,
+## so a wrong runner choice can never pass the gate.
 ##
 ##   public  -> ubuntu-24.04, CodeQL
 ##   private -> runner scale set "arc-ci" (Kubernetes, one fresh pod per job, user namespaces),
@@ -69,12 +75,14 @@ permissions: {}
 
 env:
   # The one image all tools come from (toolbox.yml builds and signs it). Bumped by hand after toolbox.yml signs a new image (Renovate cannot read the private package).
-  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:65eff30b4cd4fa45098b2c502129246d0a94b42ea40ef31b6137f0403bf24245
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:a4876b42f330247080029f3d76a76aaa02e83425a9a7f0c35f06844bdfbbd4cd
 
 jobs:
   visibility:
     name: Repository visibility
-    runs-on: ubuntu-24.04
+    # Payload, not API (the API answer is this job's output): anything but a literal true means
+    # GitHub-hosted. Private callers do not spend hosted minutes; see the header and D-57.
+    runs-on: ${{ github.event.repository.private == true && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -84,10 +92,16 @@ jobs:
       - id: read
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAYLOAD_PRIVATE: ${{ github.event.repository.private }}
         run: |
           private="$(curl -fsSL --max-time 20 -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY" | jq -r '.private')"
           case "$private" in true|false) ;; *) echo "::error::could not read repository visibility"; exit 1;; esac
+          # This job's runner came from the event payload. The payload said private but the API says
+          # public: the run may have started on the self-hosted cluster, so it must never pass.
+          if [ "$PAYLOAD_PRIVATE" = true ] && [ "$private" != true ]; then
+            echo "::error::event payload says private, API says public: refusing (D-57)"; exit 1
+          fi
           echo "private=$private" >> "$GITHUB_OUTPUT"
 
   workflow-lint:
@@ -99,6 +113,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -156,6 +176,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -243,13 +269,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           languages: ${{ inputs.sast-languages }}
           build-mode: none
           queries: security-extended
 
-      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           category: codeql
 
@@ -323,6 +349,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -442,7 +474,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/sarif"
           tb trivy fs --cache-dir "$RUNNER_TEMP/trivy-cache" --scanners vuln,misconfig --severity HIGH,CRITICAL \
             --format sarif --output "$RUNNER_TEMP/sarif/trivy.sarif" --exit-code 0 "${skip[@]}" "${ignore[@]}" "${vex[@]}" .
-      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         continue-on-error: true # code scanning may be off for the repo; the gate is `dependencies`
         with:
           sarif_file: ${{ runner.temp }}/sarif/trivy.sarif
@@ -458,6 +490,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -494,6 +532,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -522,6 +566,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -544,6 +594,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -571,6 +627,12 @@ jobs:
       contents: read
       packages: read # pull the private ci-toolbox on GitHub-hosted runners
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -597,10 +659,17 @@ jobs:
     name: security-gate
     if: ${{ always() }}
     needs: [visibility, workflow-lint, secrets, sast-public, sast-private, sast-python, dependencies, dockerfile, dependency-review]
-    runs-on: ubuntu-24.04
+    # Same payload rule as `visibility` (D-57): it only reads the needs results, so it needs no hosted minute for private repos.
+    runs-on: ${{ github.event.repository.private == true && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions: {}
     steps:
+      # G-C8 (D-58): record this hosted job's egress (audit, no blocking). Public callers only: the free tier covers public repos.
+      - name: Harden runner (audit)
+        if: ${{ needs.visibility.outputs.private == 'false' }}
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
       - name: Every capability passed (skipped only where not applicable)
         env:
           RESULTS: ${{ toJSON(needs) }}
