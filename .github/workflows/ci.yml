@@ -75,7 +75,7 @@ permissions: {}
 
 env:
   # The one image all tools come from (toolbox.yml builds and signs it). Bumped by hand after toolbox.yml signs a new image (Renovate cannot read the private package).
-  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:7375c07bdae692a83aa51015afa561e43eaa6cea5969f83f8855f9833e24c30e
+  TOOLBOX: ghcr.io/pascal-organisation/ci-toolbox:latest@sha256:0b44c54258ad4021d5903bb0eb24d5495ad2b4316883d8776033fd2b3ed53b1e
 
 jobs:
   visibility:
